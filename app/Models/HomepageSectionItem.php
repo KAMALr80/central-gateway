@@ -15,6 +15,8 @@ class HomepageSectionItem extends Model
         'desktop_image_external_url',
         'mobile_image_path',
         'mobile_image_external_url',
+        'video_path',
+        'video_external_url',
         'pdf_path',
         'alt_text',
         'link_url',

@@ -10,6 +10,7 @@ use App\Models\HomepageSection;
 use App\Models\HomepageSectionItem;
 use App\Models\Product;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -21,7 +22,10 @@ class HomepageConfigController extends Controller
 {
     public function index()
     {
-        $configs = HomepageConfig::withCount('sections')->latest()->get();
+        $configs = HomepageConfig::withCount('sections')
+            ->where('client_key', config('services.storefront.client_key'))
+            ->latest()
+            ->get();
 
         return Inertia::render('admin/homepage/index', [
             'configs' => $configs,
@@ -36,7 +40,7 @@ class HomepageConfigController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'client_key' => 'required|string|max:64|unique:homepage_configs,client_key|regex:/^[a-z0-9\-_]+$/',
+            'client_key' => ['required', 'string', 'max:64', 'unique:homepage_configs,client_key', Rule::in([config('services.storefront.client_key')])],
             'label' => 'required|string|max:255',
             'is_active' => 'boolean',
         ]);
@@ -71,12 +75,19 @@ class HomepageConfigController extends Controller
                 : ['nullable', 'url:http,https', 'max:2048'],
             'site_settings.phone' => 'nullable|string|max:40',
             'site_settings.email' => 'nullable|email|max:255',
+            'site_settings.support_email' => 'nullable|email|max:255',
             'site_settings.address' => 'nullable|string|max:1000',
             'site_settings.search_placeholder' => 'nullable|string|max:255',
             'site_settings.login_text' => 'nullable|string|max:80',
             'site_settings.register_text' => 'nullable|string|max:80',
+            'site_settings.wholesale_notice' => 'nullable|string|max:120',
             'site_settings.sale_label' => 'nullable|string|max:80',
             'site_settings.sale_url' => 'nullable|string|max:2048',
+            'site_settings.brand_menu_title' => 'nullable|string|max:80',
+            'site_settings.brand_menu_link_label' => 'nullable|string|max:80',
+            'site_settings.shop_all_label' => 'nullable|string|max:80',
+            'site_settings.nav_featured_label' => 'nullable|string|max:80',
+            'site_settings.nav_cta_label' => 'nullable|string|max:80',
             'site_settings.newsletter_enabled' => 'boolean',
             'site_settings.newsletter_title' => 'nullable|string|max:255',
             'site_settings.newsletter_placeholder' => 'nullable|string|max:255',
@@ -89,12 +100,42 @@ class HomepageConfigController extends Controller
                 : ['nullable', 'url:http,https', 'max:2048'],
             'site_settings.footer_copyright' => 'nullable|string|max:500',
             'site_settings.footer_legal_notice' => 'nullable|string|max:3000',
+            'site_settings.footer_tagline' => 'nullable|string|max:500',
+            'site_settings.footer_assistance_title' => 'nullable|string|max:120',
+            'site_settings.footer_whatsapp_notice' => 'nullable|string|max:120',
             'site_settings.business_hours_title' => 'nullable|string|max:120',
+            'site_settings.view_all_label' => 'nullable|string|max:40',
+            'site_settings.all_brands_label' => 'nullable|string|max:40',
+            'site_settings.shop_by_category_title' => 'nullable|string|max:80',
+            'site_settings.featured_brands_title' => 'nullable|string|max:80',
+            'site_settings.new_arrivals_title' => 'nullable|string|max:80',
+            'site_settings.sold_out_label' => 'nullable|string|max:40',
+            'site_settings.login_to_buy_label' => 'nullable|string|max:40',
+            'site_settings.wholesale_label' => 'nullable|string|max:40',
+            'site_settings.price_unavailable_label' => 'nullable|string|max:40',
+            'site_settings.currency_code' => 'nullable|string|size:3',
             'site_settings.nav_groups' => 'array|max:30',
             'site_settings.nav_groups.*.label' => 'required|string|max:80',
-            'site_settings.nav_groups.*.keywords' => 'array|max:30',
+            'site_settings.nav_groups.*.keywords' => 'sometimes|array|max:30',
             'site_settings.nav_groups.*.keywords.*' => 'string|max:80',
             'site_settings.nav_groups.*.url' => 'nullable|string|max:2048',
+            'site_settings.nav_groups.*.is_active' => 'sometimes|boolean',
+            'site_settings.nav_groups.*.children' => 'sometimes|array|max:100',
+            'site_settings.nav_groups.*.children.*.label' => 'required|string|max:120',
+            'site_settings.nav_groups.*.children.*.url' => 'required|string|max:2048',
+            'site_settings.nav_groups.*.children.*.is_active' => 'sometimes|boolean',
+            'site_settings.nav_groups.*.type' => 'sometimes|string|in:sections',
+            'site_settings.nav_groups.*.sections' => 'sometimes|array|max:8',
+            'site_settings.nav_groups.*.sections.*.title' => 'required|string|max:120',
+            'site_settings.nav_groups.*.sections.*.items' => 'required|array|max:30',
+            'site_settings.nav_groups.*.sections.*.items.*.label' => 'required|string|max:120',
+            'site_settings.nav_groups.*.sections.*.items.*.href' => 'required|string|max:2048',
+            'site_settings.nav_groups.*.sections.*.items.*.img' => 'nullable|string|max:2048',
+            'site_settings.nav_groups.*.promo' => 'sometimes|array',
+            'site_settings.nav_groups.*.promo.tag' => 'nullable|string|max:80',
+            'site_settings.nav_groups.*.promo.img' => 'nullable|string|max:2048',
+            'site_settings.nav_groups.*.promo.name' => 'nullable|string|max:120',
+            'site_settings.nav_groups.*.promo.href' => 'nullable|string|max:2048',
             'site_settings.footer_columns' => 'array|max:8',
             'site_settings.footer_columns.*.title' => 'required|string|max:80',
             'site_settings.footer_columns.*.links' => 'array|max:30',
@@ -102,6 +143,9 @@ class HomepageConfigController extends Controller
             'site_settings.footer_columns.*.links.*.url' => 'required|string|max:2048',
             'site_settings.business_hours' => 'array|max:14',
             'site_settings.business_hours.*' => 'string|max:120',
+            'site_settings.social_facebook_url' => 'nullable|string|max:2048',
+            'site_settings.social_instagram_url' => 'nullable|string|max:2048',
+            'site_settings.social_whatsapp_url' => 'nullable|string|max:2048',
             'site_logo' => 'nullable|image|mimes:jpg,jpeg,png,webp,gif|max:5120',
             'catalog_background_image' => 'nullable|image|mimes:jpg,jpeg,png,webp,gif|max:5120',
             'remove_site_logo' => 'sometimes|boolean',
@@ -242,19 +286,26 @@ class HomepageConfigController extends Controller
 
     public function reorderSections(Request $request, HomepageConfig $config)
     {
-        $request->validate([
-            'sections' => 'required|array',
-            'sections.*.id' => 'required|integer',
+        $validated = $request->validate([
+            'sections' => ['required', 'array', 'min:1'],
+            'sections.*.id' => ['required', 'integer', 'distinct'],
             'sections.*.sort_order' => 'required|integer|min:0',
         ]);
 
-        $idsForConfig = $config->sections()->pluck('id')->all();
+        $idsForConfig = $config->sections()->pluck('id')->map(fn ($id) => (int) $id)->sort()->values()->all();
+        $submittedIds = collect($validated['sections'])->pluck('id')->map(fn ($id) => (int) $id)->sort()->values()->all();
 
-        foreach ($request->sections as $item) {
-            if (in_array($item['id'], $idsForConfig)) {
-                HomepageSection::where('id', $item['id'])->update(['sort_order' => $item['sort_order']]);
-            }
+        if ($submittedIds !== $idsForConfig) {
+            throw ValidationException::withMessages([
+                'sections' => 'The section order must contain every section from this homepage exactly once.',
+            ]);
         }
+
+        DB::transaction(function () use ($validated, $config): void {
+            foreach ($validated['sections'] as $item) {
+                $config->sections()->whereKey($item['id'])->update(['sort_order' => $item['sort_order']]);
+            }
+        });
 
         return back()->with('success', 'Order saved.');
     }
@@ -269,7 +320,9 @@ class HomepageConfigController extends Controller
         $directory = "homepage/{$config->client_key}/{$section->id}";
         $data['desktop_image_path'] = $request->hasFile('desktop_image')
             ? $request->file('desktop_image')->store($directory, 'public')
-            : $this->storeRemoteImage($data['desktop_image_external_url'], $directory, 'desktop_image_external_url');
+            : (filled($data['desktop_image_external_url'] ?? null)
+                ? $this->storeRemoteImage($data['desktop_image_external_url'], $directory, 'desktop_image_external_url')
+                : null);
         $data['desktop_image_external_url'] = $request->hasFile('desktop_image')
             ? null
             : ($data['desktop_image_external_url'] ?? null);
@@ -284,7 +337,10 @@ class HomepageConfigController extends Controller
         $data['pdf_path'] = $request->hasFile('pdf_file')
             ? $request->file('pdf_file')->store("{$directory}/catalogs", 'public')
             : null;
-        unset($data['desktop_image'], $data['mobile_image'], $data['pdf_file']);
+        $data['video_path'] = $request->hasFile('video_file')
+            ? $request->file('video_file')->store($directory, 'public')
+            : null;
+        unset($data['desktop_image'], $data['mobile_image'], $data['pdf_file'], $data['video_file']);
 
         if ($data['kind'] === 'heading') {
             $existingHeading = $section->items()->where('kind', 'heading')->first();
@@ -340,7 +396,17 @@ class HomepageConfigController extends Controller
             $data['pdf_path'] = $newPdfPath;
         }
 
-        unset($data['desktop_image'], $data['mobile_image'], $data['pdf_file']);
+        if ($request->hasFile('video_file')) {
+            $newVideoPath = $request->file('video_file')->store($directory, 'public');
+            $this->deleteOwnedPath($config, $section, $item->video_path);
+            $data['video_path'] = $newVideoPath;
+            $data['video_external_url'] = null;
+        } elseif ($request->filled('video_external_url') && $data['video_external_url'] !== $item->video_external_url) {
+            $this->deleteOwnedPath($config, $section, $item->video_path);
+            $data['video_path'] = null;
+        }
+
+        unset($data['desktop_image'], $data['mobile_image'], $data['pdf_file'], $data['video_file']);
         $item->update($data);
 
         return back()->with('success', 'Homepage image updated.');
@@ -359,16 +425,24 @@ class HomepageConfigController extends Controller
     {
         $this->assertSectionBelongsToConfig($config, $section);
         $validated = $request->validate([
-            'items' => ['required', 'array'],
-            'items.*.id' => ['required', 'integer'],
+            'items' => ['required', 'array', 'min:1'],
+            'items.*.id' => ['required', 'integer', 'distinct'],
             'items.*.sort_order' => ['required', 'integer', 'min:0'],
         ]);
-        $allowedIds = $section->items()->pluck('id')->all();
-        foreach ($validated['items'] as $entry) {
-            if (in_array($entry['id'], $allowedIds, true)) {
-                HomepageSectionItem::whereKey($entry['id'])->update(['sort_order' => $entry['sort_order']]);
-            }
+        $allowedIds = $section->items()->pluck('id')->map(fn ($id) => (int) $id)->sort()->values()->all();
+        $submittedIds = collect($validated['items'])->pluck('id')->map(fn ($id) => (int) $id)->sort()->values()->all();
+
+        if ($submittedIds !== $allowedIds) {
+            throw ValidationException::withMessages([
+                'items' => 'The image order must contain every image from this section exactly once.',
+            ]);
         }
+
+        DB::transaction(function () use ($validated, $section): void {
+            foreach ($validated['items'] as $entry) {
+                $section->items()->whereKey($entry['id'])->update(['sort_order' => $entry['sort_order']]);
+            }
+        });
 
         return back()->with('success', 'Image order saved.');
     }
@@ -411,7 +485,7 @@ class HomepageConfigController extends Controller
     {
         $allowedKinds = match ($section->type) {
             'hero' => ['slide'],
-            'banner' => ['content'],
+            'banner' => ['heading', 'content'],
             'featured_category', 'product_carousel' => ['heading', 'content'],
             'brand_showcase' => ['heading', 'brand'],
             'catalog_showcase' => ['catalog'],
@@ -422,7 +496,7 @@ class HomepageConfigController extends Controller
             'kind' => ['required', Rule::in($allowedKinds)],
             'title' => ['nullable', 'string', 'max:255'],
             'alt_text' => ['nullable', 'string', 'max:255'],
-            'link_url' => ['nullable', 'string', 'max:2048'],
+            'link_url' => ['nullable', 'string', 'max:2048', 'regex:/^(\/[^\/]|https?:\/\/)/i'],
             'is_active' => ['sometimes', 'boolean'],
             'desktop_image' => $request->hasFile('desktop_image')
                 ? ['image', 'mimes:jpg,jpeg,png,webp,gif', 'max:5120']
@@ -439,9 +513,14 @@ class HomepageConfigController extends Controller
                 'mimetypes:application/pdf',
                 'max:51200',
             ],
+            'video_file' => $request->hasFile('video_file')
+                ? ['file', 'mimes:mp4,webm,mov', 'mimetypes:video/mp4,video/webm,video/quicktime', 'max:51200']
+                : ['nullable'],
+            'video_external_url' => ['nullable', 'url:http,https', 'max:2048'],
         ]);
 
-        if ($creating && ! $request->hasFile('desktop_image') && blank($data['desktop_image_external_url'] ?? null)) {
+        $hasVideo = $request->hasFile('video_file') || filled($data['video_external_url'] ?? null);
+        if ($creating && ! $request->hasFile('desktop_image') && blank($data['desktop_image_external_url'] ?? null) && ! ($data['kind'] === 'heading' && $hasVideo)) {
             throw ValidationException::withMessages([
                 'desktop_image' => 'Upload a desktop image or enter a desktop image URL.',
             ]);
@@ -464,12 +543,22 @@ class HomepageConfigController extends Controller
     private function validateSettings(Request $request, string $type): array
     {
         return match ($type) {
-            'featured_category', 'banner', 'brand_showcase' => [],
+            'featured_category' => $request->validate([
+                'settings.category_id' => ['required', 'integer', Rule::exists('categories', 'id')->where('is_active', true)],
+                'settings.product_limit' => ['required', 'integer', 'min:1', 'max:50'],
+            ])['settings'],
+
+            'banner' => [],
+
+            'brand_showcase' => $request->validate([
+                'settings.brand_ids' => ['present', 'array', 'max:50'],
+                'settings.brand_ids.*' => ['integer', 'distinct', Rule::exists('brands', 'id')->where('is_active', true)],
+            ])['settings'],
 
             'hero' => $request->validate([
                 'settings.subtitle' => 'nullable|string|max:500',
                 'settings.cta_text' => 'nullable|string|max:100',
-                'settings.cta_url' => 'nullable|string|max:2048',
+                'settings.cta_url' => ['nullable', 'string', 'max:2048', 'regex:/^(\/[^\/]|https?:\/\/)/i'],
                 'settings.interval_ms' => 'nullable|integer|min:2000|max:30000',
             ])['settings'] ?? [],
 
@@ -492,7 +581,7 @@ class HomepageConfigController extends Controller
 
     private function deleteOwnedFiles(HomepageConfig $config, HomepageSection $section, HomepageSectionItem $item): void
     {
-        foreach ([$item->desktop_image_path, $item->mobile_image_path, $item->pdf_path] as $path) {
+        foreach ([$item->desktop_image_path, $item->mobile_image_path, $item->pdf_path, $item->video_path] as $path) {
             $this->deleteOwnedPath($config, $section, $path);
         }
     }
@@ -513,7 +602,8 @@ class HomepageConfigController extends Controller
             $origin = parse_url($url, PHP_URL_SCHEME).'://'.$host.'/';
             $client = Http::connectTimeout(5)
                 ->timeout(15)
-                ->withHeaders(['Referer' => $origin, 'User-Agent' => 'NewEnglandDistro/1.0']);
+                ->withOptions(['allow_redirects' => false])
+                ->withHeaders(['Referer' => $origin, 'User-Agent' => 'CentralSmokeDistro/1.0']);
             // The local Windows PHP installation uses a self-signed development
             // certificate chain. Production continues to require TLS verification.
             if (app()->environment('local')) {

@@ -44,6 +44,7 @@ class HomepageController extends Controller
                 'title' => $item->title,
                 'desktop_image_url' => $this->imageUrl($item->desktop_image_path, $item->desktop_image_external_url),
                 'mobile_image_url' => $this->imageUrl($item->mobile_image_path, $item->mobile_image_external_url),
+                'video_url' => $this->imageUrl($item->video_path, $item->video_external_url),
                 'pdf_url' => $item->pdf_path
                     ? route('homepage.catalog.pdf', ['item' => $item->id])
                     : null,

@@ -7,7 +7,11 @@ use App\Http\Controllers\Admin\HomepageConfigController;
 use App\Http\Controllers\Admin\OrderController;
 use App\Http\Controllers\Admin\ProductController;
 use App\Http\Controllers\Admin\UserController;
+use App\Models\HomepageConfig;
 use Illuminate\Support\Facades\Route;
+
+// The database is shared with other storefronts; other clients' configs must stay unreachable here.
+Route::bind('config', fn (string $value) => HomepageConfig::where('client_key', config('services.storefront.client_key'))->findOrFail($value));
 
 Route::prefix('admin')->name('admin.')->middleware(['auth', 'verified', 'admin'])->group(function () {
     Route::get('/', [DashboardController::class, 'index'])->name('dashboard');

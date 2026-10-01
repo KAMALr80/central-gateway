@@ -380,7 +380,7 @@ function SectionFields({
                             onChange={(e) =>
                                 setSetting('eyebrow', e.target.value)
                             }
-                            placeholder="New England Distro"
+                            placeholder="Central Smoke Distro"
                         />
                     </div>
                     <div className="grid gap-2">
@@ -540,12 +540,7 @@ export default function HomepageEdit({
         remove_site_logo: false,
         remove_catalog_background: false,
     });
-    const initialNavText = (siteSettings.nav_groups ?? [])
-        .map(
-            (group) =>
-                `${group.label} | ${group.keywords.join(', ')} | ${group.url ?? ''}`,
-        )
-        .join('\n');
+    const initialNavText = JSON.stringify(siteSettings.nav_groups ?? [], null, 2);
     const initialFooterText = (siteSettings.footer_columns ?? [])
         .flatMap((column) => [
             `[${column.title}]`,
@@ -574,25 +569,12 @@ export default function HomepageEdit({
     }
 
     function parseNavigation(value: string) {
-        return value
-            .split('\n')
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .map((line) => {
-                const [label = '', keywords = '', url = ''] = line
-                    .split('|')
-                    .map((part) => part.trim());
-
-                return {
-                    label,
-                    keywords: keywords
-                        .split(',')
-                        .map((keyword) => keyword.trim())
-                        .filter(Boolean),
-                    ...(url ? { url } : {}),
-                };
-            })
-            .filter((group) => group.label);
+        try {
+            const groups = JSON.parse(value) as SiteSettings['nav_groups'];
+            return Array.isArray(groups) ? groups : [];
+        } catch {
+            return siteSettings.nav_groups ?? [];
+        }
     }
 
     function parseFooter(value: string) {
@@ -1001,6 +983,7 @@ export default function HomepageEdit({
                                 ['config-general', 'General'],
                                 ['config-brand', 'Brand & contact'],
                                 ['config-header', 'Header'],
+                                ['config-storefront-copy', 'Storefront copy'],
                                 ['config-seo', 'Homepage & SEO'],
                                 ['config-newsletter', 'Newsletter'],
                                 ['config-footer', 'Footer'],
@@ -1306,19 +1289,293 @@ export default function HomepageEdit({
                                         }
                                     />
                                 </div>
+                                <div className="grid gap-2">
+                                    <Label>Support email</Label>
+                                    <Input
+                                        type="email"
+                                        value={
+                                            configForm.data.site_settings
+                                                .support_email ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'support_email',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>Wholesale notice text</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .wholesale_notice ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'wholesale_notice',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>Brand menu title</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .brand_menu_title ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'brand_menu_title',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>Brand menu link label</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .brand_menu_link_label ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'brand_menu_link_label',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>&quot;Shop all&quot; nav label</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .shop_all_label ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'shop_all_label',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>Mega-menu eyebrow label</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .nav_featured_label ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'nav_featured_label',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>Mega-menu CTA label</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .nav_cta_label ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'nav_cta_label',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
                                 <div className="grid gap-2 md:col-span-2">
                                     <Label>Navigation groups</Label>
                                     <textarea
-                                        className="min-h-44 rounded-md border bg-background px-3 py-2 font-mono text-xs"
+                                        className="min-h-96 rounded-md border bg-background px-3 py-2 font-mono text-xs"
                                         value={navText}
                                         onChange={(e) =>
                                             setNavText(e.target.value)
                                         }
                                     />
                                     <p className="text-xs text-muted-foreground">
-                                        One per line: Label | keyword1, keyword2
-                                        | optional URL
+                                        JSON controls complete menu order, section headings, item labels/images/links and the featured promo card.
                                     </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div
+                            id="config-storefront-copy"
+                            className="scroll-mt-24 rounded-xl border p-5"
+                        >
+                            <h3 className="mb-4 font-semibold">
+                                Storefront copy
+                            </h3>
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <div className="grid gap-2">
+                                    <Label>&quot;View all&quot; link label</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .view_all_label ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'view_all_label',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>&quot;All brands&quot; link label</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .all_brands_label ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'all_brands_label',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>
+                                        &quot;Shop by category&quot; fallback title
+                                    </Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .shop_by_category_title ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'shop_by_category_title',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>
+                                        &quot;Featured brands&quot; fallback title
+                                    </Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .featured_brands_title ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'featured_brands_title',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>
+                                        &quot;New arrivals&quot; fallback title
+                                    </Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .new_arrivals_title ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'new_arrivals_title',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>&quot;Sold out&quot; badge label</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .sold_out_label ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'sold_out_label',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>&quot;Login to buy&quot; button label</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .login_to_buy_label ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'login_to_buy_label',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>Product price-column label</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .wholesale_label ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'wholesale_label',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>&quot;Price unavailable&quot; label</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .price_unavailable_label ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'price_unavailable_label',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>Currency code (ISO 4217)</Label>
+                                    <Input
+                                        placeholder="USD"
+                                        maxLength={3}
+                                        value={
+                                            configForm.data.site_settings
+                                                .currency_code ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'currency_code',
+                                                e.target.value.toUpperCase(),
+                                            )
+                                        }
+                                    />
                                 </div>
                             </div>
                         </div>
@@ -1576,6 +1833,52 @@ export default function HomepageEdit({
                                     />
                                 </div>
                                 <div className="grid gap-2">
+                                    <Label>Footer tagline</Label>
+                                    <textarea
+                                        className="min-h-20 rounded-md border bg-background px-3 py-2 text-sm"
+                                        value={
+                                            configForm.data.site_settings
+                                                .footer_tagline ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'footer_tagline',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>&quot;Need assistance&quot; heading</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .footer_assistance_title ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'footer_assistance_title',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>Text/WhatsApp availability notice</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .footer_whatsapp_notice ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'footer_whatsapp_notice',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
                                     <Label>Business hours heading</Label>
                                     <Input
                                         value={
@@ -1604,9 +1907,12 @@ export default function HomepageEdit({
                                             )
                                         }
                                     />
+                                    <p className="text-xs text-muted-foreground">
+                                        Shown as &quot;© {'{this text}'} - {'{year}'} - All Rights Reserved&quot;.
+                                    </p>
                                 </div>
                                 <div className="grid gap-2">
-                                    <Label>Legal / warning notice</Label>
+                                    <Label>Footer credit line</Label>
                                     <textarea
                                         className="min-h-28 rounded-md border bg-background px-3 py-2 text-sm"
                                         value={
@@ -1620,6 +1926,63 @@ export default function HomepageEdit({
                                             )
                                         }
                                     />
+                                    <p className="text-xs text-muted-foreground">
+                                        Shown next to the copyright line, e.g. &quot;Proudly Powered by Brainbean Technolabs&quot;.
+                                    </p>
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>Facebook URL (mobile footer)</Label>
+                                    <Input
+                                        type="url"
+                                        placeholder="https://facebook.com/yourpage"
+                                        value={
+                                            configForm.data.site_settings
+                                                .social_facebook_url ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'social_facebook_url',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>Instagram URL (mobile footer)</Label>
+                                    <Input
+                                        type="url"
+                                        placeholder="https://instagram.com/yourpage"
+                                        value={
+                                            configForm.data.site_settings
+                                                .social_instagram_url ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'social_instagram_url',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>WhatsApp URL (mobile footer)</Label>
+                                    <Input
+                                        type="url"
+                                        placeholder="https://wa.me/19145395580"
+                                        value={
+                                            configForm.data.site_settings
+                                                .social_whatsapp_url ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'social_whatsapp_url',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                    <p className="text-xs text-muted-foreground">
+                                        These three are only shown as icons in the mobile footer, and only when filled in.
+                                    </p>
                                 </div>
                             </div>
                         </div>

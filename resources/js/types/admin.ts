@@ -219,6 +219,8 @@ export interface HomepageSectionItem {
     title: string | null;
     desktop_image_path: string | null;
     desktop_image_external_url: string | null;
+    video_path: string | null;
+    video_external_url: string | null;
     mobile_image_path: string | null;
     mobile_image_external_url: string | null;
     pdf_path: string | null;
@@ -249,12 +251,19 @@ export interface SiteSettings {
     logo_url?: string;
     phone?: string;
     email?: string;
+    support_email?: string;
     address?: string;
     search_placeholder?: string;
     login_text?: string;
     register_text?: string;
+    wholesale_notice?: string;
     sale_label?: string;
     sale_url?: string;
+    brand_menu_title?: string;
+    brand_menu_link_label?: string;
+    shop_all_label?: string;
+    nav_featured_label?: string;
+    nav_cta_label?: string;
     newsletter_enabled?: boolean;
     newsletter_title?: string;
     newsletter_placeholder?: string;
@@ -265,10 +274,35 @@ export interface SiteSettings {
     catalog_background_logo_url?: string;
     footer_copyright?: string;
     footer_legal_notice?: string;
+    footer_tagline?: string;
+    footer_assistance_title?: string;
+    footer_whatsapp_notice?: string;
     business_hours_title?: string;
-    nav_groups?: { label: string; keywords: string[]; url?: string }[];
+    view_all_label?: string;
+    all_brands_label?: string;
+    shop_by_category_title?: string;
+    featured_brands_title?: string;
+    new_arrivals_title?: string;
+    sold_out_label?: string;
+    login_to_buy_label?: string;
+    wholesale_label?: string;
+    price_unavailable_label?: string;
+    currency_code?: string;
+    nav_groups?: {
+        label: string;
+        keywords?: string[];
+        url?: string;
+        is_active?: boolean;
+        children?: { label: string; url: string; is_active?: boolean }[];
+        type?: 'sections';
+        sections?: { title: string; items: { label: string; href: string; img?: string }[] }[];
+        promo?: { tag?: string; img?: string; name?: string; href?: string };
+    }[];
     footer_columns?: { title: string; links: { label: string; url: string }[] }[];
     business_hours?: string[];
+    social_facebook_url?: string;
+    social_instagram_url?: string;
+    social_whatsapp_url?: string;
 }
 
 export interface PaginatedMeta {

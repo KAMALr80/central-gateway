@@ -41,4 +41,9 @@ return [
         'internal_key'      => env('INTERNAL_API_KEY'),
     ],
 
+    // The admin homepage CMS of this deployment only manages this storefront's config.
+    'storefront' => [
+        'client_key' => env('STOREFRONT_CLIENT_KEY', 'central'),
+    ],
+
 ];
