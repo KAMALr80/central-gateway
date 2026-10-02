@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\OrderRequest;
 use App\Jobs\SendOrderToErp;
+use App\Models\CartItem;
 use App\Models\Order;
 use App\Models\Product;
 use App\Services\SequenceService;
@@ -86,7 +87,7 @@ class OrderController extends Controller
         try {
             $order = DB::transaction(function () use (
                 $invoiceNo, $data, $user, $lineItems,
-                $lineTotal, $discountTotal, $shippingTotal, $totalTax, $total
+                $lineTotal, $discountTotal, $shippingTotal, $totalTax, $total, $productIds
             ) {
                 $order = Order::create([
                     'invoice_no'           => $invoiceNo,
@@ -131,6 +132,9 @@ class OrderController extends Controller
                 ]);
 
                 $order->items()->createMany($lineItems);
+
+                // Ordered lines leave the saved cart on every device.
+                CartItem::where('user_id', $user->id)->whereIn('product_id', $productIds)->delete();
 
                 return $order;
             });

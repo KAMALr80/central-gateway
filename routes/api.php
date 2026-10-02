@@ -3,6 +3,7 @@
 use App\Http\Controllers\AddressController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BrandController;
+use App\Http\Controllers\CartController;
 use App\Http\Controllers\HomepageController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\ProductController;
@@ -53,6 +54,14 @@ Route::middleware('auth:api')->group(function () {
         Route::get('/orders/{id}', [OrderController::class, 'show']);
         Route::get('/orders',      [OrderController::class, 'index']);
     });
+
+    // Cart — stored per account so it follows the user across devices
+    Route::get('/cart',                      [CartController::class, 'index']);
+    Route::delete('/cart',                   [CartController::class, 'clear']);
+    Route::post('/cart/items',               [CartController::class, 'store']);
+    Route::post('/cart/merge',               [CartController::class, 'merge']);
+    Route::put('/cart/items/{productId}',    [CartController::class, 'update'])->whereNumber('productId');
+    Route::delete('/cart/items/{productId}', [CartController::class, 'destroy'])->whereNumber('productId');
 
     // Wishlist
     Route::get('/wishlist',                          [WishlistController::class, 'index']);
