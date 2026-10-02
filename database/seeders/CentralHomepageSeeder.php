@@ -61,9 +61,12 @@ class CentralHomepageSeeder extends Seeder
                 'nav_groups' => $navigation,
                 'footer_columns' => [
                     ['title' => 'Find It Fast', 'links' => [
-                        ['label' => 'Cigar Accessories', 'url' => '/shop?search=cigar%20accessories'],
-                        ['label' => 'Cleaning Products', 'url' => '/shop?search=cleaning'],
-                        ['label' => 'Detox Supplements and Health', 'url' => '/shop?search=detox'],
+                        ['label' => 'Nicotine Products and Alternatives', 'url' => '/category/6'],
+                        ['label' => 'CBD & Hemp Wellness', 'url' => '/category/73'],
+                        ['label' => 'Cigar Accessories', 'url' => '/category/67'],
+                        ['label' => 'Cleaning Products', 'url' => '/category/4?sub_cat=69'],
+                        ['label' => 'Detox Supplements and Health', 'url' => '/category/32'],
+                        ['label' => 'E-Juice Flavors and Blends', 'url' => '/category/48'],
                     ]],
                     ['title' => 'Navigation', 'links' => [
                         ['label' => 'Wishlist', 'url' => '/wishlist'],
@@ -71,6 +74,7 @@ class CentralHomepageSeeder extends Seeder
                     ['title' => 'Customer Support', 'links' => [
                         ['label' => 'My Account', 'url' => '/account/profile'],
                         ['label' => 'Track your Order', 'url' => '/orders'],
+                        ['label' => 'Return/Exchange', 'url' => 'mailto:support@centralsmokedistro.com?subject=Return%2FExchange'],
                         ['label' => 'Category Directory', 'url' => '/shop'],
                         ['label' => 'Contact Us', 'url' => 'mailto:support@centralsmokedistro.com'],
                     ]],
