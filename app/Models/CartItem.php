@@ -7,6 +7,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class CartItem extends Model
 {
+    /** Same ceiling as the storefront quantity stepper. */
+    public const MAX_QUANTITY = 999;
+
     protected $fillable = ['user_id', 'product_id', 'quantity'];
 
     protected $casts = [

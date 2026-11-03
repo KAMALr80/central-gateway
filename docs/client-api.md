@@ -2,7 +2,16 @@
 
 **Version:** 2.0  
 **Base URL:** `{GATEWAY_URL}/api`  
-**Audience:** Flutter mobile app
+**Audience:** Flutter mobile app and the storefront website
+
+---
+
+> **What changed on 2026-10-15** (website: Kamal; app: Ketul has the same list in his handoff)
+>
+> 1. **No state, no order.** `POST /api/orders` now answers `422` (`errors.billing_state`) when the account has no `state` and the order has neither `billing_state` nor `shipping_state`. Ask for the state in checkout and don't enable "Place order" without one.
+> 2. **Show tax in the cart.** New [`POST /api/cart/tax`](#post-apicarttax): call it each time the cart or checkout opens (and after quantity changes), show `total_tax` and `total`, and block checkout while `state_required` is `true`. The website can leave out `items` to quote its server cart and send `address_id` or `state` for the checkout address.
+> 3. **Barcodes.** Products carry `barcodes` (string array). [`GET /api/products?barcode=…`](#get-apiproducts) finds a product by its SKU or any barcode, with or without a leading `0`; `search` matches barcodes too. One code can belong to several products: list them all.
+> 4. `GET /api/users/me` and the login `user` add `state`. Synced order details add `items[].line_tax`, and `total_tax` now includes the state tax.
 
 ---
 
@@ -39,6 +48,10 @@ Most write routes and all user-specific routes require a JWT bearer token obtain
 ```
 
 **Token lifetime** is configured via `JWT_TTL` (default 1440 minutes / 24 hours). Tokens can be refreshed within the `JWT_REFRESH_TTL` window (default 20160 minutes / 14 days) using `POST /api/auth/refresh`.
+
+### Catalog-limited accounts
+
+An account can be limited to one category and its sub-categories, e.g. an App Store review account (`users.catalog_category_id`, set by an admin). For such an account, product lists and search, product detail (404 outside the category), the category tree, brands, the wishlist and checkout only ever include that category. Such an account can also have individual products hidden within its category (`users.catalog_hidden_product_ids`); hiding a group hides its variations too. Nothing changes for other accounts.
 
 ### Account Approval and Price Visibility
 
@@ -111,6 +124,8 @@ Failed validation returns `422` with field-level detail:
   - [POST /api/wishlist](#post-apiwishlist)
   - [DELETE /api/wishlist/{id}](#delete-apiwishlistid)
   - [DELETE /api/wishlist/product/{productId}](#delete-apiwishlistproductproductid)
+- [Cart tax](#cart-tax)
+  - [POST /api/cart/tax](#post-apicarttax)
 - [Orders](#orders)
   - [GET /api/orders](#get-apiorders)
   - [POST /api/orders](#post-apiorders)
@@ -189,8 +204,8 @@ Authenticates a user and returns a JWT token. No authentication required.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `email` | string | Yes | User's email address. |
-| `password` | string | Yes | User's password. |
+| `email` | string | Yes | The user's email address. ERP customers may instead send their WooCommerce username or ERP contact code (e.g. `CO0123`). Tried in that order. |
+| `password` | string | Yes | User's password. For an ERP customer with a WooCommerce account this is their WooCommerce (website) password, the only one their account accepts. |
 
 #### Response `200`
 
@@ -301,6 +316,8 @@ Invalidates the current token.
 
 Sends a password reset link to the given email address. No authentication required.
 
+An ERP customer with a WooCommerce account gets their current username and password instead of a link, since their password can only be changed in the ERP.
+
 To prevent user enumeration, the response is always `200` regardless of whether the email is registered.
 
 #### Request Body
@@ -313,7 +330,7 @@ To prevent user enumeration, the response is always `200` regardless of whether 
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `email` | string | Yes | The email address associated with the account. |
+| `email` | string | Yes | The email address associated with the account, or an ERP customer's WooCommerce username or contact code. |
 
 #### Response `200`
 
@@ -371,6 +388,7 @@ Resets the user's password using the token received by email. No authentication 
 #### Notes
 
 - After a successful reset the user must log in again via `POST /api/auth/login`
+- An ERP customer with a WooCommerce account can't reset here: `422` with `"message": "Your password is the same as on our website and can't be changed here. Use \"Forgot password\" to have it emailed to you."`
 - The reset token is single-use and is invalidated immediately after a successful reset
 
 ---
@@ -392,6 +410,7 @@ Returns the authenticated user's profile along with their total order count.
   "email": "jane.doe@example.com",
   "phone": "+1-555-0100",
   "address": "123 Main Street, Springfield, IL",
+  "state": "Illinois",
   "erp_contact_id": 301,
   "orders_count": 4
 }
@@ -404,6 +423,7 @@ Returns the authenticated user's profile along with their total order count.
 | `email` | string | Email address. |
 | `phone` | string\|null | Phone number. |
 | `address` | string\|null | Address. |
+| `state` | string\|null | The customer's state in the ERP, which its state taxes go by. Set by the ERP sync and not editable here. `null` for accounts the ERP hasn't linked, and for ERP customers without one: their orders then take the address's state (see [POST /api/cart/tax](#post-apicarttax)). Also in the `user` object of the login response. |
 | `erp_contact_id` | integer\|null | Linked ERP contact ID. `null` if not yet synced from ERP. |
 | `orders_count` | integer | Total number of orders placed by this user. |
 
@@ -513,6 +533,30 @@ Changes the authenticated user's password. Requires the current password for ver
 }
 ```
 
+**ERP customer with a WooCommerce account `403`** (their password can only be changed in the ERP):
+```json
+{
+  "message": "Your password is the same as on our website and can't be changed here. Use \"Forgot password\" to have it emailed to you."
+}
+```
+
+---
+
+### DELETE /api/users/me
+
+**For now a placeholder.** Always answers `200` and ends the session (the token stops working, so the app signs the user out), but deletes nothing. Each request is logged, to be acted on by hand until it's decided how a deletion should reach the ERP.
+
+**Auth required:** Yes
+
+The app may send `{"password": "..."}`; it's ignored for now.
+
+**Response `200`:**
+```json
+{
+  "message": "Your account deletion request has been received."
+}
+```
+
 ---
 
 ## Products
@@ -534,10 +578,11 @@ By default, only top-level and grouped parent products are returned — child pr
 | `brand_id` | integer | — | Filter by brand. |
 | `type` | string | — | Filter by product type (e.g. `simple`, `variable`, `grouped`). |
 | `in_stock` | boolean | — | When `true`, returns only in-stock products. |
-| `search` | string | — | Full-text search across `name`, `sku`, and `description`. When `include_children` is `false`, a match on a child product returns the child's grouped parent instead. |
+| `search` | string | — | Full-text search across `name`, `sku`, and `description`, plus an exact match on any of the product's `barcodes` (same leading-0 rule as `barcode`). When `include_children` is `false`, a match on a child product returns the child's grouped parent instead. |
+| `barcode` | string | — | Products sold under exactly this code: their `sku` or one of their `barcodes`. For an all-digit code, the code with one `0` added in front and with one leading `0` removed also match, because some scanners add a 0 (a 12-digit UPC-A read as a 13-digit EAN-13). Several products may share a code; show them all for the user to choose. With `include_children=false`, a variation's code returns its group. Max 191 characters. |
 | `include_children` | boolean | `false` | When `false`, child products (those with a `parent_id`) are excluded from results. Pass `true` to include them. |
 | `sort` | string | `name_asc` | Sort order. Options: `price_asc`, `price_desc`, `newest`, `name_asc`. |
-| `per_page` | integer | `20` | Results per page. Maximum `100`. |
+| `per_page` | integer | `20` | Results per page, at least `1`. Larger values are capped at `100`. A non-integer or value below `1` is a `422`. |
 | `page` | integer | `1` | Page number. |
 
 #### Response `200` — approved user (prices visible)
@@ -551,6 +596,7 @@ By default, only top-level and grouped parent products are returned — child pr
       "slug": "wireless-headphones-x1",
       "type": "simple",
       "sku": "WH-X1-BLK",
+      "barcodes": ["0123456789012"],
       "regular_price": "149.99",
       "sale_price": "119.99",
       "current_price": "119.99",
@@ -580,7 +626,9 @@ By default, only top-level and grouped parent products are returned — child pr
     "current_page": 1,
     "per_page": 20,
     "total": 84,
-    "last_page": 5
+    "last_page": 5,
+    "from": 1,
+    "to": 20
   }
 }
 ```
@@ -621,9 +669,12 @@ Price fields are `null` and `prices_visible` is `false`. All other fields are id
 |---|---|---|
 | `id` | integer | Gateway product ID. |
 | `name` | string | Product display name. |
-| `slug` | string | URL-safe identifier, unique across products. |
+| `slug` | string | URL-safe identifier, unique across products. Generated by the gateway, so it may differ from the storefront's slug. |
+| `website_url` | string\|null | The product's page on the storefront, as sent by the ERP (e.g. `https://unitywholesales.com/?p=119925`, which redirects to the product page). `null` when the product is not on the website. Use this, not `slug`, for share links. |
 | `type` | string | Product type (e.g. `simple`, `variable`, `grouped`). |
+| `parent_id` | integer\|null | For a variation (`variable`), the ID of its grouped product; `null` otherwise. |
 | `sku` | string\|null | Stock keeping unit. |
+| `barcodes` | string[] | Every other code the product is sold under: from the ERP's `sku_1`, `sku_2` and `barcode_number`, and a variation's `sub_sku`, `barcode`, `barcode2` and `case_barcode2`. A group's ERP SKU is here too, because its `sku` is empty. Trimmed, never empty, each once. `[]` when there are none. |
 | `regular_price` | numeric\|null | Base price. `null` when `prices_visible` is `false`. |
 | `sale_price` | numeric\|null | Discounted price. `null` if no active sale, or if `prices_visible` is `false`. |
 | `current_price` | numeric\|null | Effective price: `sale_price` if set, otherwise `regular_price`. `null` when `prices_visible` is `false`. |
@@ -644,6 +695,8 @@ Price fields are `null` and `prices_visible` is `false`. All other fields are id
 | `per_page` | integer | Items per page. |
 | `total` | integer | Total matching records. |
 | `last_page` | integer | Total number of pages. |
+| `from` | integer\|null | Position of the first product on this page (1-based). `null` when the page is empty. |
+| `to` | integer\|null | Position of the last product on this page. `null` when the page is empty. |
 
 ---
 
@@ -699,6 +752,7 @@ For child products, pass `?with_siblings=1` to include the `parent` object and t
       "slug": "wireless-headphones-x1-black",
       "type": "simple",
       "sku": "WH-X1-BLK",
+      "barcodes": ["0123456789012"],
       "regular_price": "149.99",
       "sale_price": "119.99",
       "current_price": "119.99",
@@ -1121,6 +1175,75 @@ Removes a product from the wishlist by product ID. Convenient for toggle-style U
 
 ---
 
+## Cart tax
+
+### POST /api/cart/tax
+
+The tax a cart would be charged. Call it each time the cart (or checkout) opens and after quantities change, and show `total_tax` with the totals.
+
+The ERP owns the tax rules, so the gateway asks it live. A line is taxed when its product has an active tax rule for its category and the rule's state is the customer's (a rule without a state applies everywhere). The customer's state is the one on their ERP account (`state` on `GET /api/users/me`), else the state of the address they order to.
+
+**Auth required:** Yes + approved account (`403` otherwise). Rate limited to 30 calls a minute per account.
+
+#### Request Body
+
+All fields are optional.
+
+```json
+{
+  "items": [
+    { "product_id": 12, "quantity": 3 },
+    { "product_id": 15, "quantity": 1 }
+  ],
+  "address_id": 4
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `items` | array | The cart to quote, max 1,000 lines (`quantity` 1–99,999). The app keeps its cart on the phone, so it sends this. Leave it out to quote the account's server cart (`GET /api/cart`). |
+| `state` | string\|null | The state of the address being ordered to (max 100 characters), e.g. the checkout address's `state`. |
+| `address_id` | integer\|null | Instead of `state`: one of the user's saved addresses; its state is used. |
+
+Lines that can't be ordered (inactive, a group, out of stock, outside the user's catalog) are left out, as at checkout.
+
+#### Response `200`
+
+```json
+{
+  "data": {
+    "available": true,
+    "state": "Georgia",
+    "state_source": "account",
+    "state_required": false,
+    "items": [
+      { "product_id": 12, "quantity": 3, "price": 12.0, "line_total": 36.0, "tax": 1.5, "tax_id": 5, "tax_name": "GA vape tax" },
+      { "product_id": 15, "quantity": 1, "price": 4.0, "line_total": 4.0, "tax": 0, "tax_id": null, "tax_name": null }
+    ],
+    "subtotal": 40.0,
+    "total_tax": 1.5,
+    "total": 41.5
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `available` | boolean | `false` when the ERP couldn't be reached within 8 seconds. Then `tax`, `total_tax` and `total` are `null`; the order can still be placed and the ERP adds the tax when it processes it. |
+| `state` | string\|null | The state the tax was worked out for, spelled the ERP's way ("Georgia" for "GA"). |
+| `state_source` | string\|null | `account` (the ERP customer's state), `address` (the `state` or `address_id` sent), or `null`. |
+| `state_required` | boolean | `true` when there is no state at all. **Don't let the user place the order:** ask them to add a state to their address (or pick an address with one). `POST /api/orders` would answer `422`. |
+| `items[].tax` | number\|null | The line's tax. `0` when no rule applies. |
+| `items[].tax_id`, `items[].tax_name` | integer\|null, string\|null | The ERP tax rule, when the line is taxed. |
+| `subtotal` | number | Sum of `line_total`. |
+| `total_tax` | number\|null | Sum of `tax`. |
+| `total` | number\|null | `subtotal + total_tax`. |
+| `message` | string | Only when `state_required` is `true` or `available` is `false`: text you can show. |
+
+The order's final tax is worked out again by the ERP when it receives the order, with the same rules, so it matches this quote unless the cart, the rules or the customer's state changed in between.
+
+---
+
 ## Orders
 
 Orders require both authentication **and** an approved account. Unapproved users receive `403`.
@@ -1224,7 +1347,7 @@ Places a new order. Prices are resolved from current product records at time of 
 | `billing_address_1` | string | Yes | max 255 | |
 | `billing_address_2` | string\|null | No | | |
 | `billing_city` | string | Yes | max 100 | |
-| `billing_state` | string\|null | No | | |
+| `billing_state` | string\|null | See note | | Required when the account has no `state` (see below). |
 | `billing_postcode` | string | Yes | max 20 | |
 | `billing_country` | string | Yes | exactly 2 chars | ISO 3166-1 alpha-2 country code. |
 | `billing_email` | string | Yes | valid email | |
@@ -1301,6 +1424,14 @@ total      = line_total - discount_total + shipping_total + total_tax
 }
 ```
 
+**No state response `422`:** the account has no `state` and neither has `billing_state` nor `shipping_state`. The ERP's state taxes depend on it. Ask for a state before the Place order button, using `state_required` from [POST /api/cart/tax](#post-apicarttax).
+```json
+{
+  "message": "Please add your state to your address. Tax depends on it, so an order needs one.",
+  "errors": { "billing_state": ["The state is required to place an order."] }
+}
+```
+
 **Server error response `500`:**
 ```json
 {
@@ -1314,12 +1445,36 @@ total      = line_total - discount_total + shipping_total + total_tax
 - All items must be active (`is_active = true`) and in stock (`in_stock = true`). Any unavailable item in the list will reject the entire order
 - The order is dispatched to the ERP queue immediately after `201` is returned. `sync_status` will transition from `pending` → `syncing` → `synced` asynchronously
 - The initial `status` is always `pending`; the initial `payment_status` is always `due`
+- `total_tax` is `0` when the order is placed. The ERP adds the state tax when it receives the order, and the order's `total_tax` and `total` then become the ERP's. Show the amount from [POST /api/cart/tax](#post-apicarttax) at checkout
 
 ---
 
 ### GET /api/orders/{id}
 
 Returns full detail for a single order belonging to the authenticated user, including billing/shipping addresses and line items.
+
+**Once the order is in the ERP** (it has an `erp_order_id`), the details come live from the ERP on every call, because staff may have changed lines, prices or shipping and payments are recorded there. `"source": "erp"` marks such a response, and adds:
+
+| Field | Type | Description |
+|---|---|---|
+| `source` | string | `erp` (live) or `gateway` (the gateway's copy: not in the ERP yet, or the ERP couldn't be reached within 8 seconds). |
+| `erp_invoice_no` | string\|null | The ERP's invoice number. `invoice_no` stays the app's order number. |
+| `due_date` | string\|null | `YYYY-MM-DD`, from the customer's pay term in the ERP. |
+| `amount_paid` | string\|null | Payments received, refunds taken off. |
+| `amount_due` | string\|null | `total` − `amount_paid`. |
+
+**The ERP's own statuses**, in `GET /api/orders` and here, unmapped, so the app can decide what to show. They're `null` until the order is in the ERP; `status` and `payment_status` stay, as the gateway's simplified version of the same.
+
+| Field | Values |
+|---|---|
+| `erp_status` | `draft` (received, not yet invoiced), `final` (invoiced), `quotation` |
+| `erp_shipping_status` | `ordered`, `packed`, `shipped`, `delivered`, `cancelled`, or `null` |
+| `erp_payment_status` | `due`, `partial`, `paid` |
+| `sync_status` | The gateway's: `pending`, `syncing`, `synced` (in the ERP), `failed` |
+
+The detail is always live. The list is refreshed by the ERP every 5 minutes and whenever an order's detail is opened.
+
+In both cases each item carries `product_id` (the catalog product, `null` for an ERP line not in the catalog) and `image`, so an order can be bought again. `status`, `payment_status` and `total` from the ERP are also saved, so `GET /api/orders` matches.
 
 **Auth required:** Yes + approved account
 
@@ -1402,6 +1557,7 @@ Returns full detail for a single order belonging to the authenticated user, incl
 | `items[].quantity` | integer | Quantity ordered. |
 | `items[].unit_price` | numeric | Price per unit at time of order. |
 | `items[].unit_tax` | numeric | Tax per unit. |
+| `items[].line_tax` | numeric | Only with `"source": "erp"`: the line's state tax (the ERP's `pos_line_tax_amount`). The order's `total_tax` includes it. |
 | `items[].total` | numeric | `(unit_price + unit_tax) × quantity`. |
 
 ---

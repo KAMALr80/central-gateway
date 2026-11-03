@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Order;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class ErpOrderService
 {
@@ -13,10 +14,20 @@ class ErpOrderService
 
     public function __construct()
     {
-        $this->webhookUrl = config('services.erp.order_webhook_url');
-        $this->secret     = config('services.erp.webhook_secret');
+        // Cast: an unset key must not stop every order screen from loading.
+        $this->webhookUrl = (string) config('services.erp.order_webhook_url');
+        $this->secret     = (string) config('services.erp.webhook_secret');
     }
 
+    /**
+     * Returns true once the ERP has the order, false when the ERP refused it
+     * for good (422: it can't map the order; marked failed, not retried).
+     *
+     * Anything worth another try (no connection, a timeout, 5xx, or 401 while
+     * the ERP's secret is being fixed) throws, so SendOrderToErp's tries and
+     * backoff apply. A retry after a timeout is safe: the ERP matches
+     * order_key and returns the sale it already made.
+     */
     public function sendOrder(Order $order): bool
     {
         $payload   = $this->buildPayload($order);
@@ -29,27 +40,80 @@ class ErpOrderService
             ])
             ->timeout(30)
             ->post($this->webhookUrl, $payload);
+        } catch (\Throwable $e) {
+            $this->recordFailedAttempt($order, $e->getMessage());
+            throw $e;
+        }
 
-            if ($response->successful()) {
-                $body = $response->json();
+        if ($response->successful()) {
+            $body = $response->json();
 
-                $order->update([
-                    'sync_status'  => 'synced',
-                    'erp_order_id' => $body['erp_order_id'] ?? null,
-                    'synced_at'    => now(),
-                    'sync_error'   => null,
-                ]);
-
-                return true;
+            // The ERP adds the state tax it charged; its totals replace the untaxed ones the order was placed with.
+            $totals = [];
+            if (is_numeric($body['total_tax'] ?? null) && is_numeric($body['total'] ?? null)) {
+                $totals = ['total_tax' => $body['total_tax'], 'total' => $body['total']];
             }
 
-            $this->markFailed($order, "ERP returned HTTP {$response->status()}: {$response->body()}");
-            return false;
+            $order->update([
+                'sync_status'          => 'synced',
+                'erp_order_id'         => $body['erp_order_id'] ?? null,
+                'sync_attempts'        => $order->sync_attempts + 1,
+                'last_sync_attempt_at' => now(),
+                'synced_at'            => now(),
+                'sync_error'           => null,
+            ] + $totals);
 
-        } catch (\Throwable $e) {
-            $this->markFailed($order, $e->getMessage());
+            return true;
+        }
+
+        $error = "ERP returned HTTP {$response->status()}: " . Str::limit($response->body(), 500);
+
+        if ($response->status() === 422) {
+            $this->recordFailedAttempt($order, $error, 'failed');
             return false;
         }
+
+        $this->recordFailedAttempt($order, $error);
+        throw new \RuntimeException($error);
+    }
+
+    /**
+     * The order as the ERP has it now (edited by staff, paid, shipped...), or
+     * null when the ERP can't be reached or doesn't know it. A short timeout:
+     * the app is waiting on this.
+     *
+     * GET {ERP_ORDER_WEBHOOK_URL}/{erp_order_id}?order_key=... A GET has no
+     * body to sign, so the signature covers "{timestamp}\n{id}\n{order_key}";
+     * the ERP accepts it for five minutes.
+     */
+    public function fetchOrder(Order $order): ?array
+    {
+        if (empty($order->erp_order_id) || empty($order->order_key) || $this->webhookUrl === '') {
+            return null;
+        }
+
+        $timestamp = (string) time();
+        $signature = hash_hmac('sha256', $timestamp . "\n" . $order->erp_order_id . "\n" . $order->order_key, $this->secret);
+
+        try {
+            $response = Http::withHeaders([
+                'X-Webhook-Timestamp' => $timestamp,
+                'X-Webhook-Secret'    => $signature,
+            ])
+            ->acceptJson()
+            ->timeout(8)
+            ->get(rtrim($this->webhookUrl, '/') . '/' . $order->erp_order_id, ['order_key' => $order->order_key]);
+        } catch (\Throwable $e) {
+            Log::warning('ERP order read failed', ['order_id' => $order->id, 'error' => $e->getMessage()]);
+            return null;
+        }
+
+        if (!$response->successful() || !is_array($response->json('items'))) {
+            Log::warning('ERP order read failed', ['order_id' => $order->id, 'status' => $response->status()]);
+            return null;
+        }
+
+        return $response->json();
     }
 
     private function buildPayload(Order $order): array
@@ -111,7 +175,8 @@ class ErpOrderService
         return hash_hmac('sha256', json_encode($payload), $this->secret);
     }
 
-    private function markFailed(Order $order, string $error): void
+    /** 'pending' keeps the order in line for another try; 'failed' ends it. */
+    private function recordFailedAttempt(Order $order, string $error, string $status = 'pending'): void
     {
         Log::error('ERP order sync failed', [
             'order_id' => $order->id,
@@ -120,7 +185,7 @@ class ErpOrderService
         ]);
 
         $order->update([
-            'sync_status'           => $order->sync_attempts + 1 >= 3 ? 'failed' : 'pending',
+            'sync_status'           => $status,
             'sync_attempts'         => $order->sync_attempts + 1,
             'last_sync_attempt_at'  => now(),
             'sync_error'            => $error,

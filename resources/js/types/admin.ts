@@ -15,6 +15,10 @@ export interface AdminUser {
     phone: string | null;
     address: string | null;
     erp_contact_id: string | null;
+    erp_contact_code: string | null;
+    woo_username: string | null;
+    /** Signs in with their WooCommerce login, the only password their account accepts. */
+    has_woo_login?: boolean;
     approval_status: 'pending' | 'approved' | 'rejected';
     is_admin: boolean;
     email_verified_at: string | null;
@@ -93,6 +97,8 @@ export interface AdminProduct {
     stock_quantity: number | null;
     in_stock: boolean;
     is_active: boolean;
+    is_featured: boolean;
+    best_seller_rank: number | null;
     attributes: Record<string, unknown> | null;
     synced_at: string | null;
     category?: AdminCategory | null;
@@ -102,8 +108,15 @@ export interface AdminProduct {
     children?: AdminProduct[];
     primary_image?: Media | null;
     media?: Media[];
+    barcodes?: AdminProductBarcode[];
     created_at: string;
     updated_at: string;
+}
+
+export interface AdminProductBarcode {
+    id: number;
+    code: string;
+    source: string | null;
 }
 
 export interface AdminOrderItem {
@@ -172,7 +185,15 @@ export interface AdminOrder {
     updated_at: string;
 }
 
-export type HomepageSectionType = 'featured_category' | 'banner' | 'hero' | 'product_carousel' | 'brand_showcase' | 'catalog_showcase';
+export type HomepageSectionType =
+    | 'featured_category'
+    | 'banner'
+    | 'hero'
+    | 'product_carousel'
+    | 'brand_showcase'
+    | 'catalog_showcase'
+    | 'feature_list'
+    | 'notice';
 
 export interface HomepageSectionSettings {
     // featured_category
@@ -191,6 +212,13 @@ export interface HomepageSectionSettings {
     limit?: number;
     offset?: number;
     product_ids?: number[];
+    source?: 'manual' | 'newest' | 'on_sale' | 'best_selling';
+    action_text?: string;
+    action_url?: string;
+    // banner
+    layout?: 'grid' | 'mosaic' | 'strips' | 'pair' | 'wide';
+    // feature_list
+    features?: { icon: string; title: string; text?: string }[];
     // brand_showcase
     brand_ids?: number[];
     // catalog_showcase
@@ -278,6 +306,12 @@ export interface SiteSettings {
     footer_assistance_title?: string;
     footer_whatsapp_notice?: string;
     business_hours_title?: string;
+    site_tagline?: string;
+    utility_message?: string;
+    utility_links?: { label: string; url: string }[];
+    nav_links_before?: { label: string; url: string }[];
+    nav_links?: { label: string; url: string }[];
+    all_categories?: { label: string; url: string }[];
     view_all_label?: string;
     all_brands_label?: string;
     shop_by_category_title?: string;
@@ -291,6 +325,7 @@ export interface SiteSettings {
     nav_groups?: {
         label: string;
         keywords?: string[];
+        names?: string[];
         url?: string;
         is_active?: boolean;
         children?: { label: string; url: string; is_active?: boolean }[];

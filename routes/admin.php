@@ -4,6 +4,7 @@ use App\Http\Controllers\Admin\BrandController;
 use App\Http\Controllers\Admin\CategoryController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\HomepageConfigController;
+use App\Http\Controllers\Admin\HomepageTransferController;
 use App\Http\Controllers\Admin\OrderController;
 use App\Http\Controllers\Admin\ProductController;
 use App\Http\Controllers\Admin\UserController;
@@ -32,6 +33,8 @@ Route::prefix('admin')->name('admin.')->middleware(['auth', 'verified', 'admin']
 
     Route::get('products', [ProductController::class, 'index'])->name('products.index');
     Route::get('products/{product}', [ProductController::class, 'show'])->name('products.show');
+    Route::patch('products/{product}/featured', [ProductController::class, 'updateFeatured'])->name('products.featured');
+    Route::patch('products/{product}/best-seller', [ProductController::class, 'updateBestSeller'])->name('products.best-seller');
 
     Route::get('orders', [OrderController::class, 'index'])->name('orders.index');
     Route::get('orders/{order}', [OrderController::class, 'show'])->name('orders.show');
@@ -51,4 +54,14 @@ Route::prefix('admin')->name('admin.')->middleware(['auth', 'verified', 'admin']
     Route::post('homepage/{config}/sections/{section}/items/bulk-brands', [HomepageConfigController::class, 'storeBrandLogos'])->name('homepage.sections.items.bulk-brands');
     Route::post('homepage/{config}/sections/{section}/items/{item}', [HomepageConfigController::class, 'updateItem'])->name('homepage.sections.items.update');
     Route::delete('homepage/{config}/sections/{section}/items/{item}', [HomepageConfigController::class, 'destroyItem'])->name('homepage.sections.items.destroy');
+
+    // Homepage import / export (see docs/homepage-transfer.md).
+    Route::get('homepage/{config}/export', [HomepageTransferController::class, 'export'])->middleware('throttle:homepage-transfer')->name('homepage.export');
+    Route::prefix('homepage-transfer')->name('homepage-transfer.')->middleware('throttle:homepage-transfer')->group(function () {
+        Route::get('/', [HomepageTransferController::class, 'index'])->name('index');
+        Route::post('validate', [HomepageTransferController::class, 'validatePackage'])->name('validate');
+        Route::get('imports/{import}', [HomepageTransferController::class, 'show'])->name('show');
+        Route::post('imports/{import}/confirm', [HomepageTransferController::class, 'confirm'])->name('confirm');
+        Route::post('imports/{import}/rollback', [HomepageTransferController::class, 'rollback'])->name('rollback');
+    });
 });

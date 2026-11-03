@@ -78,6 +78,8 @@ const SECTION_LABELS: Record<HomepageSectionType, string> = {
     product_carousel: 'Product Carousel',
     brand_showcase: 'Brand Showcase',
     catalog_showcase: 'Catalog Showcase',
+    feature_list: 'Feature List',
+    notice: 'Notice Heading',
 };
 
 function sectionBadgeColor(type: HomepageSectionType) {
@@ -90,6 +92,9 @@ function sectionBadgeColor(type: HomepageSectionType) {
             'bg-teal-100 text-teal-800 border-teal-200 dark:bg-teal-900/20 dark:text-teal-400',
         brand_showcase:
             'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-400',
+        feature_list:
+            'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-400',
+        notice: 'bg-slate-100 text-slate-800 border-slate-200 dark:bg-slate-900/20 dark:text-slate-400',
         catalog_showcase:
             'bg-indigo-100 text-indigo-800 border-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-400',
     };
@@ -315,7 +320,7 @@ function SectionFields({
                             type="number"
                             min={1}
                             max={50}
-                            value={data.settings.limit ?? 10}
+                            value={data.settings.limit ?? 14}
                             onChange={(e) =>
                                 setSetting('limit', parseInt(e.target.value))
                             }
@@ -544,10 +549,21 @@ export default function HomepageEdit({
     const initialFooterText = (siteSettings.footer_columns ?? [])
         .flatMap((column) => [
             `[${column.title}]`,
-            ...column.links.map((link) => `${link.label} | ${link.url}`),
+            ...(column.links ?? []).map(
+                (link) => `${link.label} | ${link.url}`,
+            ),
         ])
         .join('\n');
     const initialHoursText = (siteSettings.business_hours ?? []).join('\n');
+    const linksToText = (links?: { label: string; url: string }[]) =>
+        (links ?? []).map((link) => `${link.label} | ${link.url}`).join('\n');
+    const initialLinkTexts = {
+        utility_links: linksToText(siteSettings.utility_links),
+        nav_links_before: linksToText(siteSettings.nav_links_before),
+        nav_links: linksToText(siteSettings.nav_links),
+        all_categories: linksToText(siteSettings.all_categories),
+    };
+    const [linkTexts, setLinkTexts] = useState(initialLinkTexts);
     const [navText, setNavText] = useState(initialNavText);
     const [footerText, setFooterText] = useState(initialFooterText);
     const [hoursText, setHoursText] = useState(initialHoursText);
@@ -571,10 +587,19 @@ export default function HomepageEdit({
     function parseNavigation(value: string) {
         try {
             const groups = JSON.parse(value) as SiteSettings['nav_groups'];
+
             return Array.isArray(groups) ? groups : [];
         } catch {
             return siteSettings.nav_groups ?? [];
         }
+    }
+
+    function parseLinks(value: string) {
+        return value
+            .split('\n')
+            .map((line) => line.split('|').map((part) => part.trim()))
+            .filter(([label, url]) => label && url)
+            .map(([label, url]) => ({ label, url }));
     }
 
     function parseFooter(value: string) {
@@ -614,6 +639,10 @@ export default function HomepageEdit({
                 ...data.site_settings,
                 nav_groups: parseNavigation(navText),
                 footer_columns: parseFooter(footerText),
+                utility_links: parseLinks(linkTexts.utility_links),
+                nav_links_before: parseLinks(linkTexts.nav_links_before),
+                nav_links: parseLinks(linkTexts.nav_links),
+                all_categories: parseLinks(linkTexts.all_categories),
                 business_hours: hoursText
                     .split('\n')
                     .map((line) => line.trim())
@@ -859,7 +888,20 @@ export default function HomepageEdit({
         configForm.isDirty ||
         navText !== initialNavText ||
         footerText !== initialFooterText ||
-        hoursText !== initialHoursText;
+        hoursText !== initialHoursText ||
+        JSON.stringify(linkTexts) !== JSON.stringify(initialLinkTexts);
+    // Errors for fields that have no inline InputError (nested site settings).
+    const inlineConfigErrorKeys = [
+        'label',
+        'client_key',
+        'site_logo',
+        'site_settings.logo_url',
+        'catalog_background_image',
+        'site_settings.catalog_background_logo_url',
+    ];
+    const otherConfigErrors = Object.entries(configForm.errors).filter(
+        ([key]) => !inlineConfigErrorKeys.includes(key),
+    );
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
@@ -1065,6 +1107,24 @@ export default function HomepageEdit({
                                         onChange={(e) =>
                                             setSiteSetting(
                                                 'site_name',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>
+                                        Tagline (under the site name in the
+                                        logo)
+                                    </Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .site_tagline ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'site_tagline',
                                                 e.target.value,
                                             )
                                         }
@@ -1408,6 +1468,55 @@ export default function HomepageEdit({
                                         JSON controls complete menu order, section headings, item labels/images/links and the featured promo card.
                                     </p>
                                 </div>
+                                <div className="grid gap-2 md:col-span-2">
+                                    <Label>Top bar message</Label>
+                                    <Input
+                                        value={
+                                            configForm.data.site_settings
+                                                .utility_message ?? ''
+                                        }
+                                        onChange={(e) =>
+                                            setSiteSetting(
+                                                'utility_message',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                </div>
+                                {(
+                                    [
+                                        ['utility_links', 'Top bar links'],
+                                        [
+                                            'nav_links_before',
+                                            'Menu links before the groups (Home, …)',
+                                        ],
+                                        [
+                                            'nav_links',
+                                            'Menu links after the groups',
+                                        ],
+                                        [
+                                            'all_categories',
+                                            '“All Categories” menu (empty = every category)',
+                                        ],
+                                    ] as const
+                                ).map(([key, label]) => (
+                                    <div key={key} className="grid gap-2">
+                                        <Label>{label}</Label>
+                                        <textarea
+                                            className="min-h-28 rounded-md border bg-background px-3 py-2 font-mono text-xs"
+                                            value={linkTexts[key]}
+                                            onChange={(e) =>
+                                                setLinkTexts((texts) => ({
+                                                    ...texts,
+                                                    [key]: e.target.value,
+                                                }))
+                                            }
+                                        />
+                                        <p className="text-xs text-muted-foreground">
+                                            One per line: Label | /url
+                                        </p>
+                                    </div>
+                                ))}
                             </div>
                         </div>
 
@@ -1986,6 +2095,21 @@ export default function HomepageEdit({
                                 </div>
                             </div>
                         </div>
+                        {otherConfigErrors.length > 0 && (
+                            <div
+                                role="alert"
+                                className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive"
+                            >
+                                <p className="font-semibold">
+                                    Site settings were not saved:
+                                </p>
+                                <ul className="mt-2 list-disc space-y-1 pl-5">
+                                    {otherConfigErrors.map(([key, message]) => (
+                                        <li key={key}>{message}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
                         <div className="sticky bottom-4 z-10 flex items-center justify-between gap-4 rounded-xl border bg-background/95 p-3 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/85">
                             <p
                                 className={`hidden text-xs sm:block ${hasUnsavedSiteChanges ? 'font-medium text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}
@@ -2616,6 +2740,7 @@ export default function HomepageEdit({
                                     </SelectItem>
                                 </SelectContent>
                             </Select>
+                            <InputError message={itemForm.errors.kind} />
                         </div>
                         <div className="grid gap-2">
                             <Label htmlFor="item-title">Internal title</Label>
@@ -2626,6 +2751,7 @@ export default function HomepageEdit({
                                     itemForm.setData('title', e.target.value)
                                 }
                             />
+                            <InputError message={itemForm.errors.title} />
                         </div>
                         <div className="grid gap-2">
                             <Label htmlFor="item-alt">
@@ -2656,6 +2782,7 @@ export default function HomepageEdit({
                                     itemForm.setData('link_url', e.target.value)
                                 }
                             />
+                            <InputError message={itemForm.errors.link_url} />
                         </div>
                         <div className="grid gap-2">
                             <Label htmlFor="desktop-image">
@@ -2839,6 +2966,14 @@ export default function HomepageEdit({
                                 background is recommended.
                             </p>
                             <InputError message={brandForm.errors.images} />
+                            {Object.entries(brandForm.errors)
+                                .filter(([key]) => key.startsWith('images.'))
+                                .map(([key, message]) => (
+                                    <InputError
+                                        key={key}
+                                        message={`${brandForm.data.images[Number(key.split('.')[1])]?.name ?? key}: ${message}`}
+                                    />
+                                ))}
                         </div>
                         {brandForm.data.images.length > 0 && (
                             <div className="max-h-40 overflow-y-auto rounded-md border p-3 text-xs">

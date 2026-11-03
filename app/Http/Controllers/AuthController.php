@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\LoginRequest;
 use App\Http\Requests\RegisterRequest;
+use App\Models\DeletedAccount;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +22,8 @@ class AuthController extends Controller
             'approval_status' => 'pending',
         ]);
 
+        DeletedAccount::forget($request->email);
+
         return response()->json([
             'message' => 'Registration successful. Your account is pending approval before you can log in.',
         ], 201);
@@ -28,20 +31,18 @@ class AuthController extends Controller
 
     public function login(LoginRequest $request): JsonResponse
     {
-        $token = auth('api')->attempt($request->only('email', 'password'));
+        // "email" may also be a WooCommerce username or an ERP contact code (see User::findForLogin).
+        $user = User::findForLogin($request->email);
 
-        if (!$token) {
+        if (!$user || !Hash::check($request->password, $user->password)) {
             return response()->json(['message' => 'Invalid credentials'], 401);
         }
 
-        $user = auth('api')->user();
-
         if ($user->approval_status !== 'approved') {
-            auth('api')->logout();
             return response()->json(['message' => 'Your account is pending approval.'], 403);
         }
 
-        return $this->tokenResponse($token);
+        return $this->tokenResponse(auth('api')->login($user), $user);
     }
 
     public function validate(): JsonResponse
@@ -56,10 +57,19 @@ class AuthController extends Controller
     {
         try {
             $token = auth('api')->refresh();
-            return $this->tokenResponse($token);
+
+            // refresh() blacklists the request's token, so auth('api')->user() would read that old token and
+            // return null (formatUser(null) was a 500). Resolve the user from the newly issued token instead.
+            $user = auth('api')->setToken($token)->user();
         } catch (\Exception $e) {
             return response()->json(['message' => 'Token cannot be refreshed'], 401);
         }
+
+        if (! $user) {
+            return response()->json(['message' => 'Token cannot be refreshed'], 401);
+        }
+
+        return $this->tokenResponse($token, $user);
     }
 
     public function logout(): JsonResponse
@@ -70,10 +80,13 @@ class AuthController extends Controller
 
     public function forgotPassword(Request $request): JsonResponse
     {
-        $request->validate(['email' => ['required', 'email']]);
+        $request->validate(['email' => ['required', 'string', 'max:255']]);
 
-        // Always return 200 to prevent user enumeration
-        Password::broker()->sendResetLink($request->only('email'));
+        // Always return 200 to prevent user enumeration. A WooCommerce customer gets their login
+        // details instead of a link (User::sendPasswordResetNotification).
+        if ($user = User::findForLogin($request->email)) {
+            Password::broker()->sendResetLink(['email' => $user->email]);
+        }
 
         return response()->json(['message' => 'If that email address is registered, a password reset link has been sent.']);
     }
@@ -86,6 +99,10 @@ class AuthController extends Controller
             'password'              => ['required', 'string', 'min:8', 'confirmed'],
             'password_confirmation' => ['required', 'string'],
         ]);
+
+        if (User::where('email', $request->email)->first()?->hasWooLogin()) {
+            return response()->json(['message' => User::WOO_PASSWORD_MESSAGE], 422);
+        }
 
         $status = Password::broker()->reset(
             $request->only('email', 'password', 'password_confirmation', 'token'),
@@ -103,13 +120,13 @@ class AuthController extends Controller
         return response()->json(['message' => 'Password has been reset successfully.']);
     }
 
-    private function tokenResponse(string $token): JsonResponse
+    private function tokenResponse(string $token, ?User $user = null): JsonResponse
     {
         return response()->json([
             'access_token' => $token,
             'token_type'   => 'bearer',
             'expires_in'   => config('jwt.ttl') * 60,
-            'user'         => $this->formatUser(auth('api')->user()),
+            'user'         => $this->formatUser($user ?? auth('api')->user()),
         ]);
     }
 
@@ -121,6 +138,7 @@ class AuthController extends Controller
             'email'          => $user->email,
             'phone'          => $user->phone,
             'address'        => $user->address,
+            'state'          => $user->state,
             'erp_contact_id' => $user->erp_contact_id,
             'approval_status' => $user->approval_status,
         ];

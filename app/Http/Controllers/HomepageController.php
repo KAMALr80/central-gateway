@@ -7,11 +7,20 @@ use App\Models\Category;
 use App\Models\HomepageConfig;
 use App\Models\HomepageSectionItem;
 use App\Models\Product;
+use App\Support\CatalogScope;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 class HomepageController extends Controller
 {
+    /**
+     * Products here are formatted by ProductController, so they look exactly
+     * like /api/products: prices only for approved accounts, and a
+     * catalog-limited account (CatalogScope) sees only its own catalog.
+     */
+    public function __construct(private ProductController $products) {}
+
     public function show(Request $request)
     {
         $clientKey = $request->input('client');
@@ -28,16 +37,26 @@ class HomepageController extends Controller
             return response()->json(['message' => 'Homepage config not found.'], 404);
         }
 
-        $sections = $config->activeSections()->with('activeItems')->get();
+        $sections   = $config->activeSections()->with('activeItems')->get();
+        $showPrices = $this->products->canSeePrices();
+        $scope      = CatalogScope::ids();
 
-        $resolved = $sections->map(fn ($section) => [
+        $resolved = $sections->map(function ($section) use ($showPrices, $scope) {
+            $data = $this->resolveData($section->type, $section->settings ?? [], $showPrices, $scope);
+
+            // A catalog-limited account never sees a category outside its catalog.
+            if ($scope !== null && $section->type === 'featured_category' && $data === null) {
+                return null;
+            }
+
+            return [
             'id'       => $section->id,
             'type'     => $section->type,
             'title'    => $section->title,
             'sort_order' => $section->sort_order,
             'is_active' => $section->is_active,
             'settings' => (object) ($section->settings ?? []),
-            'data'     => $this->resolveData($section->type, $section->settings ?? []),
+            'data'     => $data,
             'items'    => $section->activeItems->map(fn ($item) => [
                 'id' => $item->id,
                 'kind' => $item->kind,
@@ -53,7 +72,8 @@ class HomepageController extends Controller
                 'sort_order' => $item->sort_order,
                 'is_active' => $item->is_active,
             ])->values(),
-        ]);
+            ];
+        })->filter()->values();
 
         $siteSettings = $config->site_settings ?? [];
 
@@ -93,6 +113,9 @@ class HomepageController extends Controller
             'Content-Disposition' => 'inline; filename="'.str($item->title ?: 'catalog')->slug().'.pdf"',
             'Cache-Control' => 'public, max-age=3600',
             'X-Content-Type-Options' => 'nosniff',
+            // Lets the cross-origin storefront (pdf.js) see that byte ranges are supported, so phones/tablets
+            // only download the pages being viewed instead of the whole catalog.
+            'Access-Control-Expose-Headers' => 'Accept-Ranges, Content-Range, Content-Length',
         ]);
     }
 
@@ -105,75 +128,101 @@ class HomepageController extends Controller
         return $externalUrl;
     }
 
-    private function resolveData(string $type, array $settings): array|null
+    private function resolveData(string $type, array $settings, bool $showPrices, ?array $scope): array|null
     {
         return match ($type) {
-            'featured_category' => $this->resolveFeaturedCategory($settings),
-            'brand_showcase'    => $this->resolveBrandShowcase($settings),
-            'product_carousel'  => $this->resolveProductCarousel($settings),
+            'featured_category' => $this->resolveFeaturedCategory($settings, $showPrices, $scope),
+            'brand_showcase'    => $this->resolveBrandShowcase($settings, $scope),
+            'product_carousel'  => $this->resolveProductCarousel($settings, $scope),
             default             => null,
         };
     }
 
-    private function resolveFeaturedCategory(array $settings): array|null
+    private function resolveFeaturedCategory(array $settings, bool $showPrices, ?array $scope): array|null
     {
         $categoryId = $settings['category_id'] ?? null;
-        if (! $categoryId) {
+        if (! $categoryId || ($scope !== null && ! in_array((int) $categoryId, $scope))) {
             return null;
         }
 
-        $category = Category::select('id', 'name', 'slug', 'description')
-            ->with('primaryImage')
-            ->find($categoryId);
+        $category = Category::with('primaryImage')->find($categoryId);
 
         if (! $category) {
             return null;
         }
 
-        $limit    = (int) ($settings['product_limit'] ?? 8);
-        $products = Product::where('category_id', $categoryId)
+        $limit = (int) ($settings['product_limit'] ?? 8);
+        $query = Product::where('category_id', $categoryId)
             ->where('is_active', true)
             ->where('in_stock', true)
             ->whereNull('parent_id')
-            ->with('primaryImage')
-            ->select('id', 'name', 'slug', 'sku', 'regular_price', 'sale_price', 'in_stock')
-            ->limit($limit)
-            ->get();
+            ->with(['category', 'subCategory', 'brand', 'primaryImage', 'barcodes']);
+
+        if ($scope !== null) {
+            CatalogScope::restrictProducts($query, $scope);
+        }
 
         return [
-            'category' => $category,
-            'products' => $products,
+            'category' => [
+                'id'          => $category->id,
+                'name'        => $category->name,
+                'slug'        => $category->slug,
+                'description' => $category->description,
+                'image'       => $category->primaryImage?->public_url,
+            ],
+            'products' => $query->limit($limit)->get()
+                ->map(fn (Product $product) => $this->products->formatProduct($product, showPrices: $showPrices))
+                ->values(),
         ];
     }
 
-    private function resolveBrandShowcase(array $settings): array|null
+    private function resolveBrandShowcase(array $settings, ?array $scope): array|null
     {
         $brandIds = $settings['brand_ids'] ?? [];
         if (empty($brandIds)) {
             return null;
         }
 
-        $brands = Brand::whereIn('id', $brandIds)
-            ->where('is_active', true)
-            ->with('primaryImage')
-            ->select('id', 'name', 'slug')
-            ->get()
+        $query = Brand::whereIn('id', $brandIds)->where('is_active', true)->with('primaryImage');
+
+        // A catalog-limited account only sees brands it has products of.
+        if ($scope !== null) {
+            $query->whereIn('id', CatalogScope::restrictProducts(Product::query()->where('is_active', true), $scope)->select('brand_id'));
+        }
+
+        $brands = $query->get()
             ->sortBy(fn ($b) => array_search($b->id, $brandIds))
+            ->map(fn (Brand $brand) => [
+                'id'    => $brand->id,
+                'name'  => $brand->name,
+                'slug'  => $brand->slug,
+                'image' => $brand->primaryImage?->public_url,
+            ])
             ->values();
 
         return ['brands' => $brands];
     }
 
-    private function resolveProductCarousel(array $settings): array
+    private function resolveProductCarousel(array $settings, ?array $scope): array
     {
         $limit = min(max((int) ($settings['limit'] ?? 14), 1), 50);
+        $source = (string) ($settings['source'] ?? 'manual');
+
+        if (in_array($source, ['newest', 'on_sale', 'best_selling'], true)) {
+            return ['product_ids' => $this->productIdsBySource($source, $limit, $scope)];
+        }
+
         $requestedIds = array_slice(array_values(array_unique(array_map('intval', $settings['product_ids'] ?? []))), 0, $limit);
-        $existingIds = Product::query()
+        $existing = Product::query()
             ->whereIn('id', $requestedIds)
             ->where('is_active', true)
-            ->whereNull('parent_id')
-            ->pluck('id')
-            ->all();
+            ->whereNull('parent_id');
+
+        if ($scope !== null) {
+            CatalogScope::restrictProducts($existing, $scope);
+        }
+
+        $existingIds = $existing->pluck('id')->all();
         $existingLookup = array_flip($existingIds);
 
         return [
@@ -182,5 +231,45 @@ class HomepageController extends Controller
                 fn (int $id) => isset($existingLookup[$id]),
             )),
         ];
+    }
+
+    /**
+     * Product ids for a carousel that is filled from live catalogue data instead of a hand-picked list.
+     * Read-only: nothing here changes products, prices or stock, and an empty result stays empty.
+     */
+    private function productIdsBySource(string $source, int $limit, ?array $scope): array
+    {
+        // A catalog-limited account only gets products of its own catalog, as with hand-picked lists.
+        $visible = function () use ($scope) {
+            $query = Product::query()->where('products.is_active', true)->whereNull('products.parent_id');
+
+            return $scope === null ? $query : CatalogScope::restrictProducts($query, $scope);
+        };
+
+        return match ($source) {
+            'newest' => $visible()->where('in_stock', true)->orderByDesc('created_at')->orderByDesc('id')->limit($limit)->pluck('id')->all(),
+            'on_sale' => $visible()->whereNotNull('sale_price')->whereColumn('sale_price', '<', 'regular_price')->where('in_stock', true)->orderByDesc('id')->limit($limit)->pluck('id')->all(),
+            'best_selling' => $this->bestSellingProductIds($limit, $visible),
+        };
+    }
+
+    /** Most ordered products (variants count towards their parent product), from real order lines only. */
+    private function bestSellingProductIds(int $limit, \Closure $visible): array
+    {
+        $ranked = DB::table('order_items')
+            ->join('products', 'products.id', '=', 'order_items.product_id')
+            ->where('products.is_active', true)
+            ->selectRaw('COALESCE(products.parent_id, products.id) as top_id, SUM(order_items.quantity) as sold')
+            ->groupBy('top_id')
+            ->orderByDesc('sold')
+            ->limit(500)
+            ->pluck('top_id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        // Keep the sales ranking, but only products this request may show (active parents, in scope).
+        $allowed = array_flip($visible()->whereIn('products.id', $ranked)->pluck('id')->all());
+
+        return array_slice(array_values(array_filter($ranked, fn (int $id) => isset($allowed[$id]))), 0, $limit);
     }
 }

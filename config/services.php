@@ -35,10 +35,20 @@ return [
         ],
     ],
 
+    // The storefront endpoint that drops its cached homepage (see FrontendRevalidator). The storefront address is
+    // app.frontend_url (FRONTEND_URL); the secret must equal REVALIDATE_SECRET on the storefront.
+    'frontend' => [
+        'revalidate_secret' => env('FRONTEND_REVALIDATE_SECRET'),
+    ],
+
     'erp' => [
         'order_webhook_url' => env('ERP_ORDER_WEBHOOK_URL'),
-        'webhook_secret'    => env('ERP_WEBHOOK_SECRET'),
-        'internal_key'      => env('INTERNAL_API_KEY'),
+        // Tax quotes for the cart. Unset: the order URL with "/orders" replaced by "/tax".
+        'tax_url' => env('ERP_TAX_URL'),
+        'webhook_secret' => env('ERP_WEBHOOK_SECRET'),
+        // An order needs a state (the account's, else the address's): the ERP's state taxes depend on it.
+        'require_state' => (bool) env('ORDERS_REQUIRE_STATE', true),
+        'internal_key' => env('INTERNAL_API_KEY'),
     ],
 
     // The admin homepage CMS of this deployment only manages this storefront's config.

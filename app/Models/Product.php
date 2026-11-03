@@ -22,6 +22,7 @@ class Product extends Model
         'brand_id',
         'name',
         'slug',
+        'website_url',
         'type',
         'description',
         'short_description',
@@ -44,13 +45,15 @@ class Product extends Model
     }
 
     protected $casts = [
-        'regular_price'  => 'decimal:2',
-        'sale_price'     => 'decimal:2',
-        'manage_stock'   => 'boolean',
-        'in_stock'       => 'boolean',
-        'is_active'      => 'boolean',
-        'attributes'     => 'array',
-        'synced_at'      => 'datetime',
+        'regular_price' => 'decimal:2',
+        'sale_price' => 'decimal:2',
+        'manage_stock' => 'boolean',
+        'in_stock' => 'boolean',
+        'is_active' => 'boolean',
+        'is_featured' => 'boolean',
+        'best_seller_rank' => 'integer',
+        'attributes' => 'array',
+        'synced_at' => 'datetime',
     ];
 
     // Current active price — sale price if set, otherwise regular price
@@ -61,7 +64,7 @@ class Product extends Model
 
     public function isOnSale(): bool
     {
-        return !is_null($this->sale_price) && $this->sale_price < $this->regular_price;
+        return ! is_null($this->sale_price) && $this->sale_price < $this->regular_price;
     }
 
     public function parent(): BelongsTo
@@ -72,7 +75,7 @@ class Product extends Model
     public function children(): HasMany
     {
         return $this->hasMany(Product::class, 'parent_id')
-                    ->where('is_active', true);
+            ->where('is_active', true);
     }
 
     public function category(): BelongsTo
@@ -88,6 +91,38 @@ class Product extends Model
     public function brand(): BelongsTo
     {
         return $this->belongsTo(Brand::class);
+    }
+
+    /** Codes it is sold under besides its sku; the product sync replaces them on every sync. */
+    public function barcodes(): HasMany
+    {
+        return $this->hasMany(ProductBarcode::class)->orderBy('id');
+    }
+
+    /**
+     * Products whose sku or any barcode is one of ProductBarcode::lookupCodes($code), compared whole
+     * (MySQL's collation ignores case). A blank code matches nothing.
+     */
+    public function scopeWithCode($query, ?string $code)
+    {
+        return $query->where(self::codeMatcher($code));
+    }
+
+    /** scopeWithCode's condition, for plain query builders on the products table as well. */
+    public static function codeMatcher(?string $code): \Closure
+    {
+        $codes = ProductBarcode::lookupCodes($code);
+
+        return function ($q) use ($codes) {
+            if ($codes === []) {
+                $q->whereRaw('1 = 0');
+
+                return;
+            }
+
+            $q->whereIn('sku', $codes)
+                ->orWhereIn('id', ProductBarcode::query()->select('product_id')->whereIn('code', $codes));
+        };
     }
 
     public function media(): MorphMany

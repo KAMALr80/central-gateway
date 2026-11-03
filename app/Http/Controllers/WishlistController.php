@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Product;
 use App\Models\WishlistItem;
+use App\Support\CatalogScope;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -16,6 +17,7 @@ class WishlistController extends Controller
             ->latest()
             ->get()
             ->filter(fn($item) => $item->product !== null)
+            ->filter(fn($item) => ($scope = CatalogScope::ids()) === null || CatalogScope::allowsProduct($item->product, $scope))
             ->map(fn($item) => [
                 'id'         => $item->id,
                 'added_at'   => $item->created_at->toIso8601String(),
@@ -25,7 +27,9 @@ class WishlistController extends Controller
                     'slug'     => $item->product->slug,
                     'sku'      => $item->product->sku,
                     'in_stock' => $item->product->in_stock,
+                    'stock_quantity' => $item->product->manage_stock ? $item->product->stock_quantity : null,
                     'image'    => $item->product->primaryImage?->public_url,
+                    'image_variants' => app(\App\Services\MediaThumbnails::class)->variantsFor($item->product->primaryImage),
                 ],
             ])
             ->values();
@@ -39,11 +43,15 @@ class WishlistController extends Controller
             'product_id' => ['required', 'integer', 'exists:products,id'],
         ]);
 
-        $product = Product::where('id', $request->product_id)
-            ->where('is_active', true)
-            ->firstOrFail();
+        $query = Product::where('id', $request->product_id)->where('is_active', true);
+        if (($scope = CatalogScope::ids()) !== null) {
+            CatalogScope::restrictProducts($query, $scope);
+        }
+        $product = $query->firstOrFail();
 
-        $item = WishlistItem::firstOrCreate([
+        // createOrFirst relies on the unique (user_id, product_id) index, so a double click or two devices
+        // adding at the same moment return the existing row instead of failing with a duplicate-key error.
+        $item = WishlistItem::createOrFirst([
             'user_id'    => auth('api')->id(),
             'product_id' => $product->id,
         ]);

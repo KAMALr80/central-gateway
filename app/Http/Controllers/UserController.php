@@ -3,9 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\UpdateUserRequest;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 
 class UserController extends Controller
 {
@@ -19,6 +21,7 @@ class UserController extends Controller
             'email'          => $user->email,
             'phone'          => $user->phone,
             'address'        => $user->address,
+            'state'          => $user->state,
             'erp_contact_id' => $user->erp_contact_id,
             'orders_count'   => $user->orders->count(),
             'approval_status' => $user->approval_status,
@@ -49,6 +52,29 @@ class UserController extends Controller
         ]);
     }
 
+    /**
+     * Account deletion, for now a placeholder: it always answers success and
+     * ends the session, so the app signs the user out, but nothing is deleted.
+     * How a deletion should reach the ERP (the customer, their orders and
+     * invoices) isn't decided yet, so each request is logged to be acted on
+     * by hand. The real deletion (DeletedAccount keeps the ERP contact sync
+     * from recreating an account) is in commit 9c5be45.
+     */
+    public function destroyMe(Request $request): JsonResponse
+    {
+        $user = auth('api')->user();
+
+        Log::notice('Account deletion requested (not deleted yet)', [
+            'user_id'        => $user->id,
+            'email'          => $user->email,
+            'erp_contact_id' => $user->erp_contact_id,
+        ]);
+
+        auth('api')->logout();
+
+        return response()->json(['message' => 'Your account deletion request has been received.']);
+    }
+
     public function changePassword(Request $request): JsonResponse
     {
         $request->validate([
@@ -58,6 +84,10 @@ class UserController extends Controller
         ]);
 
         $user = auth('api')->user();
+
+        if ($user->hasWooLogin()) {
+            return response()->json(['message' => User::WOO_PASSWORD_MESSAGE], 403);
+        }
 
         if (!Hash::check($request->current_password, $user->password)) {
             return response()->json([

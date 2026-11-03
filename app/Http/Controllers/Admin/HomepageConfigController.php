@@ -9,6 +9,7 @@ use App\Models\HomepageConfig;
 use App\Models\HomepageSection;
 use App\Models\HomepageSectionItem;
 use App\Models\Product;
+use App\Services\FrontendRevalidator;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -17,6 +18,7 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
+use Psr\Http\Message\UriInterface;
 
 class HomepageConfigController extends Controller
 {
@@ -136,11 +138,27 @@ class HomepageConfigController extends Controller
             'site_settings.nav_groups.*.promo.img' => 'nullable|string|max:2048',
             'site_settings.nav_groups.*.promo.name' => 'nullable|string|max:120',
             'site_settings.nav_groups.*.promo.href' => 'nullable|string|max:2048',
+            'site_settings.nav_groups.*.names' => 'array|max:100',
+            'site_settings.nav_groups.*.names.*' => 'string|max:120',
+            'site_settings.site_tagline' => 'nullable|string|max:255',
+            'site_settings.nav_links_before' => 'array|max:12',
+            'site_settings.nav_links_before.*.label' => 'required|string|max:80',
+            'site_settings.nav_links_before.*.url' => 'required|string|max:2048',
+            'site_settings.all_categories' => 'array|max:40',
+            'site_settings.all_categories.*.label' => 'required|string|max:80',
+            'site_settings.all_categories.*.url' => 'required|string|max:2048',
             'site_settings.footer_columns' => 'array|max:8',
             'site_settings.footer_columns.*.title' => 'required|string|max:80',
             'site_settings.footer_columns.*.links' => 'array|max:30',
             'site_settings.footer_columns.*.links.*.label' => 'required|string|max:120',
             'site_settings.footer_columns.*.links.*.url' => 'required|string|max:2048',
+            'site_settings.utility_message' => 'nullable|string|max:255',
+            'site_settings.utility_links' => 'array|max:8',
+            'site_settings.utility_links.*.label' => 'required|string|max:80',
+            'site_settings.utility_links.*.url' => 'required|string|max:2048',
+            'site_settings.nav_links' => 'array|max:12',
+            'site_settings.nav_links.*.label' => 'required|string|max:80',
+            'site_settings.nav_links.*.url' => 'required|string|max:2048',
             'site_settings.business_hours' => 'array|max:14',
             'site_settings.business_hours.*' => 'string|max:120',
             'site_settings.social_facebook_url' => 'nullable|string|max:2048',
@@ -159,6 +177,12 @@ class HomepageConfigController extends Controller
         if ($request->hasFile('catalog_background_image') && $request->boolean('remove_catalog_background')) {
             throw ValidationException::withMessages(['catalog_background_image' => 'Choose a new background or remove the current background, not both.']);
         }
+
+        // Keep site settings the admin form does not send (they are only replaced when posted).
+        $data['site_settings'] = array_merge(
+            $config->site_settings ?? [],
+            $this->normalizeSiteSettings($request, $data['site_settings']),
+        );
 
         $oldClientKey = $config->client_key;
         $directory = "homepage/{$data['client_key']}/site";
@@ -227,7 +251,7 @@ class HomepageConfigController extends Controller
     public function storeSection(Request $request, HomepageConfig $config)
     {
         $base = $request->validate([
-            'type' => 'required|in:featured_category,banner,hero,product_carousel,brand_showcase,catalog_showcase',
+            'type' => 'required|in:featured_category,banner,hero,product_carousel,brand_showcase,catalog_showcase,feature_list,notice',
             'title' => 'required|string|max:255',
             'is_active' => 'boolean',
             'settings' => 'array',
@@ -253,13 +277,22 @@ class HomepageConfigController extends Controller
         abort_if($section->homepage_config_id !== $config->id, 404);
 
         $base = $request->validate([
-            'type' => 'required|in:featured_category,banner,hero,product_carousel,brand_showcase,catalog_showcase',
+            'type' => 'required|in:featured_category,banner,hero,product_carousel,brand_showcase,catalog_showcase,feature_list,notice',
             'title' => 'required|string|max:255',
             'is_active' => 'boolean',
             'settings' => 'array',
         ]);
 
         $settings = $this->validateSettings($request, $base['type']);
+
+        // The admin form does not edit these yet; keep what is stored instead of dropping it on every save.
+        if ($section->type === $base['type']) {
+            foreach (['source', 'layout', 'action_text', 'action_url', 'features'] as $key) {
+                if (! array_key_exists($key, $settings) && array_key_exists($key, $section->settings ?? [])) {
+                    $settings[$key] = $section->settings[$key];
+                }
+            }
+        }
 
         $section->update([
             'type' => $base['type'],
@@ -300,6 +333,8 @@ class HomepageConfigController extends Controller
                 'sections' => 'The section order must contain every section from this homepage exactly once.',
             ]);
         }
+        // A query-builder update raises no model events, so ask for the storefront refresh explicitly.
+        app(FrontendRevalidator::class)->queue();
 
         DB::transaction(function () use ($validated, $config): void {
             foreach ($validated['sections'] as $item) {
@@ -314,8 +349,8 @@ class HomepageConfigController extends Controller
     {
         $this->assertSectionBelongsToConfig($config, $section);
         $data = $this->validateItem($request, true, $section);
-        if ($section->type === 'product_carousel' && $data['kind'] === 'content') {
-            abort_if($section->items()->where('kind', 'content')->count() >= 2, 422, 'A product section supports at most two promotional banners.');
+        if ($section->type === 'product_carousel' && $data['kind'] === 'content' && $section->items()->where('kind', 'content')->count() >= 2) {
+            throw ValidationException::withMessages(['kind' => 'A product section supports at most two promotional banners.']);
         }
         $directory = "homepage/{$config->client_key}/{$section->id}";
         $data['desktop_image_path'] = $request->hasFile('desktop_image')
@@ -543,17 +578,28 @@ class HomepageConfigController extends Controller
     private function validateSettings(Request $request, string $type): array
     {
         return match ($type) {
+            'notice' => [],
+
+            'banner' => $request->validate([
+                'settings.layout' => 'nullable|in:grid,mosaic,strips,pair,wide',
+            ])['settings'] ?? [],
+
             'featured_category' => $request->validate([
                 'settings.category_id' => ['required', 'integer', Rule::exists('categories', 'id')->where('is_active', true)],
                 'settings.product_limit' => ['required', 'integer', 'min:1', 'max:50'],
             ])['settings'],
 
-            'banner' => [],
-
             'brand_showcase' => $request->validate([
                 'settings.brand_ids' => ['present', 'array', 'max:50'],
                 'settings.brand_ids.*' => ['integer', 'distinct', Rule::exists('brands', 'id')->where('is_active', true)],
             ])['settings'],
+
+            'feature_list' => $request->validate([
+                'settings.features' => 'array|max:8',
+                'settings.features.*.icon' => 'required|in:truck,store,clock,shield,tag,phone',
+                'settings.features.*.title' => 'required|string|max:80',
+                'settings.features.*.text' => 'nullable|string|max:120',
+            ])['settings'] ?? [],
 
             'hero' => $request->validate([
                 'settings.subtitle' => 'nullable|string|max:500',
@@ -564,6 +610,9 @@ class HomepageConfigController extends Controller
 
             'product_carousel' => $request->validate([
                 'settings.limit' => 'integer|min:1|max:50',
+                'settings.source' => 'nullable|in:manual,newest,on_sale,best_selling',
+                'settings.action_text' => 'nullable|string|max:80',
+                'settings.action_url' => 'nullable|string|max:2048',
                 'settings.product_ids' => 'present|array|max:50',
                 'settings.product_ids.*' => 'integer|distinct|exists:products,id',
             ])['settings'] ?? [],
@@ -588,21 +637,22 @@ class HomepageConfigController extends Controller
 
     private function storeRemoteImage(string $url, string $directory, string $field): string
     {
-        $host = parse_url($url, PHP_URL_HOST);
-        $ips = $host ? gethostbynamel($host) : false;
-        if (! $host || ! $ips || collect($ips)->contains(fn (string $ip) => filter_var(
-            $ip,
-            FILTER_VALIDATE_IP,
-            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE,
-        ) === false)) {
-            throw ValidationException::withMessages([$field => 'The image URL must point to a publicly accessible server.']);
-        }
+        $this->assertPublicHost($url, $field);
 
         try {
-            $origin = parse_url($url, PHP_URL_SCHEME).'://'.$host.'/';
+            $origin = parse_url($url, PHP_URL_SCHEME).'://'.parse_url($url, PHP_URL_HOST).'/';
             $client = Http::connectTimeout(5)
                 ->timeout(15)
-                ->withOptions(['allow_redirects' => false])
+                ->withOptions([
+                    // The host check only resolves IPv4 addresses, so never connect over IPv6.
+                    'force_ip_resolve' => 'v4',
+                    // Every redirect hop must pass the same public-host check as the original URL.
+                    'allow_redirects' => [
+                        'max' => 3,
+                        'protocols' => ['http', 'https'],
+                        'on_redirect' => fn ($request, $response, UriInterface $uri) => $this->assertPublicHost((string) $uri, $field),
+                    ],
+                ])
                 ->withHeaders(['Referer' => $origin, 'User-Agent' => 'CentralSmokeDistro/1.0']);
             // The local Windows PHP installation uses a self-signed development
             // certificate chain. Production continues to require TLS verification.
@@ -610,6 +660,8 @@ class HomepageConfigController extends Controller
                 $client = $client->withoutVerifying();
             }
             $response = $client->get($url);
+        } catch (ValidationException $exception) {
+            throw $exception;
         } catch (\Throwable) {
             throw ValidationException::withMessages([$field => 'The image could not be downloaded from this URL.']);
         }
@@ -630,6 +682,42 @@ class HomepageConfigController extends Controller
         Storage::disk('public')->put($path, $body);
 
         return $path;
+    }
+
+    private function assertPublicHost(string $url, string $field): void
+    {
+        $host = parse_url($url, PHP_URL_HOST);
+        $ips = $host ? gethostbynamel($host) : false;
+        if (! $host || ! $ips || collect($ips)->contains(fn (string $ip) => filter_var(
+            $ip,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE | FILTER_FLAG_GLOBAL_RANGE,
+        ) === false)) {
+            throw ValidationException::withMessages([$field => 'The image URL must point to a publicly accessible server.']);
+        }
+    }
+
+    /**
+     * The edit page submits multipart form data, which sends booleans as "0"/"1"
+     * and omits empty arrays. Restore the JSON shape the storefront and edit page read.
+     */
+    private function normalizeSiteSettings(Request $request, array $settings): array
+    {
+        if (array_key_exists('newsletter_enabled', $settings)) {
+            $settings['newsletter_enabled'] = $request->boolean('site_settings.newsletter_enabled');
+        }
+
+        $settings['nav_groups'] = array_map(
+            fn (array $group) => $group + ['keywords' => []],
+            $settings['nav_groups'] ?? [],
+        );
+        $settings['footer_columns'] = array_map(
+            fn (array $column) => $column + ['links' => []],
+            $settings['footer_columns'] ?? [],
+        );
+        $settings['business_hours'] ??= [];
+
+        return $settings;
     }
 
     private function deleteOwnedPath(HomepageConfig $config, HomepageSection $section, ?string $path): void

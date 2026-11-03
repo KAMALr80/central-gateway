@@ -7,9 +7,12 @@ use App\Jobs\SendOrderToErp;
 use App\Models\CartItem;
 use App\Models\Order;
 use App\Models\Product;
+use App\Services\ErpOrderService;
 use App\Services\SequenceService;
+use App\Support\CatalogScope;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -33,18 +36,73 @@ class OrderController extends Controller
         ]);
     }
 
+    /**
+     * An optional Idempotency-Key header makes placing an order safe to repeat: the storefront sends one key
+     * per checkout attempt, so a network retry, a second tab or a double submit returns the order that key
+     * already created instead of a new one. Without the header the request behaves as before.
+     */
     public function store(OrderRequest $request): JsonResponse
+    {
+        $key = $request->header('Idempotency-Key');
+        if ($key === null || $key === '') {
+            return $this->placeOrder($request);
+        }
+        if (! preg_match('/^[A-Za-z0-9_-]{8,100}$/', $key)) {
+            return response()->json(['message' => 'The Idempotency-Key header is invalid.'], 422);
+        }
+
+        $cacheKey = 'order-idempotency:'.auth('api')->id().':'.hash('sha256', $key);
+        $lock = Cache::lock($cacheKey.':lock', 30);
+        if (! $lock->get()) {
+            return response()->json(['message' => 'This order is already being placed. Please wait a moment.'], 409);
+        }
+
+        try {
+            $existing = ($id = Cache::get($cacheKey)) ? Order::where('user_id', auth('api')->id())->find($id) : null;
+            if ($existing) {
+                return response()->json(['message' => 'Order placed successfully', 'data' => $this->formatOrder($existing)], 201);
+            }
+
+            $response = $this->placeOrder($request);
+            if ($response->getStatusCode() === 201) {
+                Cache::put($cacheKey, $response->getData(true)['data']['id'], now()->addDay());
+            }
+
+            return $response;
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function placeOrder(OrderRequest $request): JsonResponse
     {
         $user = auth('api')->user();
         $data = $request->validated();
 
+        // The ERP charges state taxes by the customer's state: their ERP account's, else the order address's.
+        // Without one the order would escape those taxes, so it isn't taken.
+        $state = trim((string) $user->state) ?: trim((string) ($data['billing_state'] ?? '')) ?: trim((string) ($data['shipping_state'] ?? ''));
+        if ($state === '' && config('services.erp.require_state', true)) {
+            return response()->json([
+                'message' => 'Please add your state to your address. Tax depends on it, so an order needs one.',
+                'errors'  => ['billing_state' => ['The state is required to place an order.']],
+            ], 422);
+        }
+
         // Resolve products and calculate totals
         $productIds = collect($data['items'])->pluck('product_id');
-        $products   = Product::whereIn('id', $productIds)
+        $productQuery = Product::whereIn('id', $productIds)
             ->where('is_active', true)
             ->where('in_stock', true)
-            ->get()
-            ->keyBy('id');
+            // A grouped product only picks a variation (as in the cart); it has no price of its own.
+            ->where('type', '!=', 'grouped');
+
+        // A user limited to part of the catalog can't order outside it.
+        if (($scope = CatalogScope::ids()) !== null) {
+            CatalogScope::restrictProducts($productQuery, $scope);
+        }
+
+        $products = $productQuery->get()->keyBy('id');
 
         // Validate all requested products exist and are available
         foreach ($data['items'] as $item) {
@@ -76,9 +134,12 @@ class OrderController extends Controller
             ];
         }
 
-        $discountTotal  = $data['discount_total']  ?? 0;
-        $shippingTotal  = $data['shipping_total']  ?? 0;
-        $totalTax       = $data['total_tax']        ?? 0;
+        // Totals are never taken from the client: the storefront has no discount, shipping or tax engine
+        // (shipping is quoted later and prices are net of tax), so these stay 0 until one exists server-side.
+        // Accepting client values here allowed a buyer to lower the order total.
+        $discountTotal  = 0;
+        $shippingTotal  = 0;
+        $totalTax       = 0;
         $total          = $lineTotal - $discountTotal + $shippingTotal + $totalTax;
 
         $sequence = app(SequenceService::class);
@@ -98,7 +159,7 @@ class OrderController extends Controller
                     'erp_customer_id'      => $user->erp_contact_id,
                     'status'               => 'pending',
                     'payment_status'       => 'due',
-                    'currency'             => $data['currency']       ?? 'USD',
+                    'currency'             => 'USD', // catalog prices are USD
                     'line_total'           => $lineTotal,
                     'discount_total'       => $discountTotal,
                     'shipping_total'       => $shippingTotal,
@@ -133,20 +194,14 @@ class OrderController extends Controller
 
                 $order->items()->createMany($lineItems);
 
-                // Ordered lines leave the saved cart on every device.
-                CartItem::where('user_id', $user->id)->whereIn('product_id', $productIds)->delete();
+                // The ordered products leave the account cart in the same transaction, so every device sees
+                // the emptied cart even if the client never gets to clear it.
+                CartItem::where('user_id', $user->id)
+                    ->whereIn('product_id', array_column($lineItems, 'product_id'))
+                    ->delete();
 
                 return $order;
             });
-
-            // Dispatch job to send order to ERP asynchronously
-            SendOrderToErp::dispatch($order);
-
-            return response()->json([
-                'message' => 'Order placed successfully',
-                'data'    => $this->formatOrder($order),
-            ], 201);
-
         } catch (\Throwable $e) {
             Log::emergency('Failed to place order', [
                 'error' => $e->getMessage(),
@@ -156,15 +211,110 @@ class OrderController extends Controller
             ]);
             return response()->json(['message' => 'Failed to place order'], 500);
         }
+
+        // The order is committed at this point. A failure to queue the ERP sync must not be reported to the
+        // buyer as a failed order (they would place it again); it is logged and the order stays 'pending'
+        // so it can be re-sent.
+        try {
+            SendOrderToErp::dispatch($order);
+        } catch (\Throwable $e) {
+            Log::error('Order placed but ERP sync could not be queued', [
+                'order_id' => $order->id,
+                'error'    => $e->getMessage(),
+            ]);
+        }
+
+        return response()->json([
+            'message' => 'Order placed successfully',
+            'data'    => $this->formatOrder($order),
+        ], 201);
     }
 
-    public function show(int $id): JsonResponse
+    /**
+     * An order the ERP has is shown as the ERP has it now: staff may have
+     * changed lines, prices or shipping since it was placed, and payments are
+     * recorded there. If the ERP can't be reached, the gateway's copy is shown
+     * instead. "source" says which: "erp" or "gateway".
+     */
+    public function show(int $id, ErpOrderService $erp): JsonResponse
     {
-        $order = Order::with('items')
+        $order = Order::with('items.product.primaryImage')
             ->where('user_id', auth('api')->id())
             ->findOrFail($id);
 
-        return response()->json($this->formatOrder($order, detailed: true));
+        $live = $order->erp_order_id ? $erp->fetchOrder($order) : null;
+
+        if ($live) {
+            // Keep the list (index) in step with what the detail now shows.
+            $order->update([
+                'status'         => $live['status'] ?? $order->status,
+                'payment_status' => $live['payment_status'] ?? $order->payment_status,
+                'total'          => $live['total'] ?? $order->total,
+            ] + array_intersect_key($live, array_flip(['erp_status', 'erp_shipping_status', 'erp_payment_status'])));
+
+            return response()->json($this->formatErpOrder($order, $live));
+        }
+
+        return response()->json($this->formatOrder($order, detailed: true) + ['source' => 'gateway']);
+    }
+
+    /**
+     * The ERP's sale in the same shape as formatOrder(), plus what only the
+     * ERP knows: its invoice number, the due date from the customer's pay
+     * term, and what's been paid. Items are linked back to the catalog by
+     * their ERP product id, for "buy again" and images.
+     */
+    private function formatErpOrder(Order $order, array $live): array
+    {
+        $base  = $this->formatOrder($order, detailed: true);
+        $money = fn ($value) => $value === null ? null : number_format((float) $value, 2, '.', '');
+        $count = fn ($value) => floor((float) $value) == (float) $value ? (int) $value : (float) $value;
+
+        $products = Product::with('primaryImage')
+            ->whereIn('erp_product_id', collect($live['items'])->pluck('erp_product_id')->filter()->unique())
+            ->get()
+            ->keyBy('erp_product_id');
+
+        $address = fn (?array $fromErp, array $ours) => $fromErp
+            ? array_merge($ours, array_filter($fromErp, fn ($value) => $value !== null))
+            : $ours;
+
+        return array_merge($base, [
+            'status'           => $live['status'] ?? $base['status'],
+            'payment_status'   => $live['payment_status'] ?? $base['payment_status'],
+            'transaction_date' => $live['transaction_date'] ?? $base['transaction_date'],
+            'line_total'       => $money($live['line_total'] ?? $base['line_total']),
+            'discount_total'   => $money($live['discount_total'] ?? $base['discount_total']),
+            'shipping_total'   => $money($live['shipping_total'] ?? $base['shipping_total']),
+            'total_tax'        => $money($live['total_tax'] ?? $base['total_tax']),
+            'total'            => $money($live['total'] ?? $base['total']),
+            'customer_note'    => $live['customer_note'] ?? $base['customer_note'],
+            'billing'          => $address($live['billing'] ?? null, $base['billing']),
+            'shipping'         => $address($live['shipping'] ?? null, $base['shipping']),
+            'items'            => collect($live['items'])->map(function (array $item) use ($products, $money, $count) {
+                $product = $products->get($item['erp_product_id'] ?? null);
+
+                return [
+                    'id'         => $item['id'] ?? null,
+                    'product_id' => $product?->id,
+                    'image'      => $product?->primaryImage?->public_url,
+                    'image_variants' => app(\App\Services\MediaThumbnails::class)->variantsFor($product?->primaryImage),
+                    'name'       => $item['name'] ?? $product?->name,
+                    'sku'        => $item['sku'] ?? null,
+                    'quantity'   => $count($item['quantity'] ?? 0),
+                    'unit_price' => $money($item['unit_price'] ?? 0),
+                    'unit_tax'   => $money($item['unit_tax'] ?? 0),
+                    // The line's state tax (transaction_sell_lines.pos_line_tax_amount); total_tax includes it.
+                    'line_tax'   => $money($item['line_tax'] ?? 0),
+                    'total'      => $money($item['total'] ?? 0),
+                ];
+            })->values()->all(),
+            'erp_invoice_no'   => $live['invoice_no'] ?? null,
+            'due_date'         => $live['due_date'] ?? null,
+            'amount_paid'      => $money($live['amount_paid'] ?? null),
+            'amount_due'       => $money($live['amount_due'] ?? null),
+            'source'           => 'erp',
+        ]);
     }
 
     private function formatOrder(Order $order, bool $detailed = false): array
@@ -174,6 +324,10 @@ class OrderController extends Controller
             'invoice_no'     => $order->invoice_no,
             'status'         => $order->status,
             'payment_status' => $order->payment_status,
+            // The ERP's own statuses, unmapped; null until the order is in the ERP.
+            'erp_status'          => $order->erp_status,
+            'erp_shipping_status' => $order->erp_shipping_status,
+            'erp_payment_status'  => $order->erp_payment_status,
             'sync_status'    => $order->sync_status,
             'currency'       => $order->currency,
             'total'          => $order->total,
@@ -212,6 +366,9 @@ class OrderController extends Controller
             ];
             $data['items']           = $order->items->map(fn($item) => [
                 'id'         => $item->id,
+                'product_id' => $item->product_id,
+                'image'      => $item->product?->primaryImage?->public_url,
+                'image_variants' => app(\App\Services\MediaThumbnails::class)->variantsFor($item->product?->primaryImage),
                 'name'       => $item->name,
                 'sku'        => $item->sku,
                 'quantity'   => $item->quantity,
