@@ -11,9 +11,10 @@ return [
 
     'allowed_methods' => ['*'],
 
+    // Unset or empty allows any origin; an empty list would block every browser request.
     'allowed_origins' => array_values(array_filter(array_map(
         'trim',
-        explode(',', (string) env('CORS_ALLOWED_ORIGINS', '*'))
+        explode(',', (string) env('CORS_ALLOWED_ORIGINS') ?: '*')
     ))),
 
     'allowed_origins_patterns' => [],

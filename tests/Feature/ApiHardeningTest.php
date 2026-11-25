@@ -203,3 +203,15 @@ test('the API root never echoes an unlisted origin', function () {
     // the library answers with the one configured origin, which a browser on evil.example will reject
     expect($response->headers->get('Access-Control-Allow-Origin'))->not->toBe('https://evil.example');
 });
+test('an empty CORS_ALLOWED_ORIGINS allows any storefront origin instead of blocking them all', function (?string $value) {
+    $value === null ? putenv('CORS_ALLOWED_ORIGINS') : putenv("CORS_ALLOWED_ORIGINS=$value");
+    try {
+        config(['cors' => require config_path('cors.php')]);
+    } finally {
+        putenv('CORS_ALLOWED_ORIGINS');
+    }
+
+    expect(config('cors.allowed_origins'))->toBe(['*']);
+    $this->withHeaders(['Origin' => 'https://centralwebsite.vercel.app'])->getJson('/api')
+        ->assertOk()->assertHeader('Access-Control-Allow-Origin', '*');
+})->with(['empty' => '', 'unset' => null]);
