@@ -102,7 +102,9 @@ class CentralHomepageSeeder extends Seeder
                 'category_id' => Category::where('name', 'E-Juice')->value('id'),
                 'product_limit' => 8,
             ]],
-            ['type' => 'product_carousel', 'title' => 'New Arrivals', 'settings' => ['limit' => 14, 'product_ids' => $newest]],
+            // The newest products at the time of the request, like the reference site (no fixed list to go stale).
+            ['type' => 'product_carousel', 'title' => 'New Arrivals', 'settings' => ['limit' => 14, 'source' => 'newest', 'product_ids' => []]],
+            ['type' => 'banner', 'title' => 'Hot Products', 'settings' => []],
             ['type' => 'banner', 'title' => 'Continue Shopping', 'settings' => []],
             ['type' => 'product_carousel', 'title' => 'Top Trending Products', 'settings' => ['limit' => 14, 'product_ids' => $trending]],
         ];
@@ -143,7 +145,7 @@ class CentralHomepageSeeder extends Seeder
         ]);
 
         $this->syncItems($managed['Our Categories'], [
-            $this->item('heading', 'Our Categories', 'https://centralsmokedistro.com/wp-content/uploads/2024/05/our-categories.webp', '/shop'),
+            $this->item('heading', 'Our Categories', 'https://centralsmokedistro.com/wp-content/uploads/2024/05/our-categories.webp', '/shop', 'https://centralsmokedistro.com/wp-content/uploads/2026/06/Banner-1-ezgif.com-gif-maker.mp4'),
             $this->item('content', 'Zenith E-Liquids', 'https://centralsmokedistro.com/wp-content/uploads/2024/12/ZENITH-E-LIQUIED-1-1-png.webp', '/shop?search=zenith'),
             $this->item('content', 'Zig-Zag', 'https://centralsmokedistro.com/wp-content/uploads/2024/05/zig-zag.webp', '/shop?search=zig-zag'),
             $this->item('content', 'Ooze', 'https://centralsmokedistro.com/wp-content/uploads/2024/05/ooze.webp', '/shop?search=ooze'),
@@ -154,8 +156,15 @@ class CentralHomepageSeeder extends Seeder
             $this->item('heading', 'New Arrivals', 'https://centralsmokedistro.com/wp-content/uploads/2024/05/new-arrivals.webp', '/new'),
         ]);
 
+        // A video-only heading that introduces the Disposables banners below it.
+        $this->syncItems($managed['Hot Products'], [
+            $this->item('heading', 'Hot Products', null, null, 'https://centralsmokedistro.com/wp-content/uploads/2026/06/HOT-PRODUCTS-min-ezgif.com-gif-maker.mp4'),
+        ]);
+
         $this->syncItems($managed['Continue Shopping'], [
             $this->item('content', 'Disposables', 'https://centralsmokedistro.com/wp-content/uploads/2024/05/image-3-5.webp', '/shop?search=disposables'),
+            // The thin "continue shopping for" strip between the Disposables and Nicotine banners.
+            $this->item('content', 'Continue Shopping For', 'https://centralsmokedistro.com/wp-content/uploads/2024/06/Artboard-6-8-1024x37.png', null),
             $this->item('content', 'Nicotine Disposable', 'https://centralsmokedistro.com/wp-content/uploads/2025/05/Banner-940x236-1.jpg', '/shop?search=nicotine%20disposable'),
             $this->item('content', '7-Hydroxy Products', 'https://centralsmokedistro.com/wp-content/uploads/2026/09/7-hydroxy-2-banner.jpg', '/shop?search=7-hydroxy'),
         ]);
@@ -167,12 +176,20 @@ class CentralHomepageSeeder extends Seeder
         $this->command?->info("Synchronized homepage config '{$clientKey}' with ".count($sections).' reference sections.');
     }
 
-    private function item(string $kind, string $title, string $url, string $link): array
+    /**
+     * One homepage item. $url is an image (or, for a brand, its .mp4); $video is an optional heading video.
+     * A heading may be video-only ($url null).
+     */
+    private function item(string $kind, string $title, ?string $url, ?string $link, ?string $video = null): array
     {
-        return compact('kind', 'title', 'url', 'link');
+        return compact('kind', 'title', 'url', 'link', 'video');
     }
 
-
+    /**
+     * Every image and video is copied into public storage, so the homepage never depends on the old
+     * website staying online. The source URL is kept as the external URL for reference; the public API
+     * prefers the stored file.
+     */
     private function syncItems(HomepageSection $section, array $items): void
     {
         $keep = [];
@@ -183,18 +200,29 @@ class CentralHomepageSeeder extends Seeder
                 'link_url' => $item['link'],
                 'sort_order' => $order,
                 'is_active' => true,
+                'desktop_image_path' => null,
+                'desktop_image_external_url' => null,
+                'video_path' => null,
+                'video_external_url' => null,
             ];
 
-            if ($item['kind'] === 'heading') {
-                $values['desktop_image_external_url'] = $item['url'];
-                $values['desktop_image_path'] = $this->storeHeadingBanner($section, $item['title'], $item['url']);
-            } elseif ($item['kind'] === 'brand' && str_ends_with(strtolower(parse_url($item['url'], PHP_URL_PATH)), '.mp4')) {
-                $values['desktop_image_path'] = null;
-                $values['desktop_image_external_url'] = null;
-                $values['video_path'] = $this->storeBrandVideo($section, $item['title'], $item['url']);
+            $folder = match ($item['kind']) {
+                'heading' => 'headings',
+                'brand' => 'brands',
+                default => 'banners',
+            };
+
+            if ($item['url'] !== null && $this->isVideo($item['url'])) {
+                $values['video_path'] = $this->storeVideo($section, $folder, $item['title'], $item['url']);
                 $values['video_external_url'] = $item['url'];
-            } else {
+            } elseif ($item['url'] !== null) {
+                $values['desktop_image_path'] = $this->storeImage($section, $folder, $item['title'], $item['url']);
                 $values['desktop_image_external_url'] = $item['url'];
+            }
+
+            if ($item['video'] !== null) {
+                $values['video_path'] = $this->storeVideo($section, $folder, $item['title'], $item['video']);
+                $values['video_external_url'] = $item['video'];
             }
 
             $record = $section->items()->updateOrCreate(
@@ -207,45 +235,38 @@ class CentralHomepageSeeder extends Seeder
         $section->items()->whereNotIn('id', $keep)->update(['is_active' => false]);
     }
 
-    private function storeBrandVideo(HomepageSection $section, string $title, string $url): string
+    private function isVideo(string $url): bool
     {
-        $path = "homepage/central/{$section->id}/brands/".Str::slug($title).'.mp4';
-
-        if (Storage::disk('public')->exists($path)) {
-            return $path;
-        }
-
-        $request = Http::connectTimeout(10)->timeout(90)
-            ->withHeaders(['User-Agent' => 'CentralSmokeDistro/1.0']);
-
-        if (app()->environment('local')) {
-            $request = $request->withoutVerifying();
-        }
-
-        $response = $request->get($url);
-        $contentType = strtolower(trim(explode(';', $response->header('Content-Type', ''))[0]));
-
-        if (! $response->successful() || ! in_array($contentType, ['video/mp4', 'application/octet-stream'], true) || strlen($response->body()) > 30 * 1024 * 1024) {
-            throw new \RuntimeException("Unable to import brand video '{$title}' from {$url}.");
-        }
-
-        Storage::disk('public')->put($path, $response->body());
-
-        return $path;
+        return str_ends_with(strtolower((string) parse_url($url, PHP_URL_PATH)), '.mp4');
     }
 
-    private function storeHeadingBanner(HomepageSection $section, string $title, string $url): string
+    private function storeVideo(HomepageSection $section, string $folder, string $title, string $url): string
     {
-        $extension = strtolower(pathinfo(parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION));
-        $extension = in_array($extension, ['jpg', 'jpeg', 'png', 'webp', 'gif'], true) ? $extension : 'webp';
-        $path = "homepage/central/{$section->id}/headings/".Str::slug($title).'.'.$extension;
+        $path = "homepage/central/{$section->id}/{$folder}/".Str::slug($title).'.mp4';
 
+        return $this->download($path, $url, "video '{$title}'", 90, 50 * 1024 * 1024,
+            fn (string $type) => in_array($type, ['video/mp4', 'application/octet-stream'], true));
+    }
+
+    private function storeImage(HomepageSection $section, string $folder, string $title, string $url): string
+    {
+        $extension = strtolower(pathinfo((string) parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION));
+        $extension = in_array($extension, ['jpg', 'jpeg', 'png', 'webp', 'gif'], true) ? $extension : 'webp';
+        $path = "homepage/central/{$section->id}/{$folder}/".Str::slug($title).'.'.$extension;
+
+        return $this->download($path, $url, "image '{$title}'", 30, 5 * 1024 * 1024,
+            fn (string $type) => str_starts_with($type, 'image/'));
+    }
+
+    /** Downloads $url to $path on the public disk once; a file already there is reused. */
+    private function download(string $path, string $url, string $what, int $timeout, int $maxBytes, \Closure $acceptsType): string
+    {
         if (Storage::disk('public')->exists($path)) {
             return $path;
         }
 
-        $request = Http::connectTimeout(5)
-            ->timeout(30)
+        $request = Http::connectTimeout(10)
+            ->timeout($timeout)
             ->withOptions(['allow_redirects' => false])
             ->withHeaders(['User-Agent' => 'CentralSmokeDistro/1.0']);
 
@@ -256,8 +277,8 @@ class CentralHomepageSeeder extends Seeder
         $response = $request->get($url);
         $contentType = strtolower(trim(explode(';', $response->header('Content-Type', ''))[0]));
 
-        if (! $response->successful() || ! str_starts_with($contentType, 'image/') || strlen($response->body()) > 5 * 1024 * 1024) {
-            throw new \RuntimeException("Unable to import heading banner '{$title}' from {$url}.");
+        if (! $response->successful() || ! $acceptsType($contentType) || strlen($response->body()) > $maxBytes) {
+            throw new \RuntimeException("Unable to import {$what} from {$url}.");
         }
 
         Storage::disk('public')->put($path, $response->body());
