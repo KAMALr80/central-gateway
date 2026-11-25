@@ -29,7 +29,8 @@ yarn-error.log
 docs/context.md
 /.claude
 .htaccess
-/public/.htaccess
+# Laravel's front-controller rewrite: every deployment needs it.
+!/public/.htaccess
 error_log
 # local secrets / certificates
 .env.*
