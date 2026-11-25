@@ -105,9 +105,14 @@ class CentralHomepageSeeder extends Seeder
             // The newest products at the time of the request, like the reference site (no fixed list to go stale).
             ['type' => 'product_carousel', 'title' => 'New Arrivals', 'settings' => ['limit' => 14, 'source' => 'newest', 'product_ids' => []]],
             ['type' => 'banner', 'title' => 'Hot Products', 'settings' => []],
-            ['type' => 'banner', 'title' => 'Continue Shopping', 'settings' => []],
+            ['type' => 'banner', 'title' => 'Disposables', 'settings' => []],
             ['type' => 'product_carousel', 'title' => 'Top Trending Products', 'settings' => ['limit' => 14, 'product_ids' => $trending]],
         ];
+
+        // Earlier seeds called the Disposables block "Continue Shopping"; rename it so its uploads are kept.
+        if (! $config->sections()->where('title', 'Disposables')->exists()) {
+            $config->sections()->where('title', 'Continue Shopping')->update(['title' => 'Disposables']);
+        }
 
         $managed = [];
         foreach ($sections as $order => $section) {
@@ -161,10 +166,9 @@ class CentralHomepageSeeder extends Seeder
             $this->item('heading', 'Hot Products', null, null, 'https://centralsmokedistro.com/wp-content/uploads/2026/06/HOT-PRODUCTS-min-ezgif.com-gif-maker.mp4'),
         ]);
 
-        $this->syncItems($managed['Continue Shopping'], [
-            $this->item('content', 'Disposables', 'https://centralsmokedistro.com/wp-content/uploads/2024/05/image-3-5.webp', '/shop?search=disposables'),
-            // The thin "continue shopping for" strip between the Disposables and Nicotine banners.
-            $this->item('content', 'Continue Shopping For', 'https://centralsmokedistro.com/wp-content/uploads/2024/06/Artboard-6-8-1024x37.png', null),
+        // The "Disposables" strip heads the block; below it the wide Nicotine banner sits beside the 7-Hydroxy one.
+        $this->syncItems($managed['Disposables'], [
+            $this->item('heading', 'Disposables', 'https://centralsmokedistro.com/wp-content/uploads/2024/05/image-3-5.webp', '/shop?search=disposables'),
             $this->item('content', 'Nicotine Disposable', 'https://centralsmokedistro.com/wp-content/uploads/2025/05/Banner-940x236-1.jpg', '/shop?search=nicotine%20disposable'),
             $this->item('content', '7-Hydroxy Products', 'https://centralsmokedistro.com/wp-content/uploads/2026/09/7-hydroxy-2-banner.jpg', '/shop?search=7-hydroxy'),
         ]);
